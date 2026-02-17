@@ -1,0 +1,10 @@
+# Credentials - NEVER commit this file
+src/config.h
+
+# Build files
+.pio
+.vscode
+
+# OS files
+.DS_Store
+Thumbs.db
