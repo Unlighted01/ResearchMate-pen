@@ -1,13 +1,13 @@
 /**
- * Camera Module Implementation for ESP32-S3-WROOM
- * OV5640 via parallel DVP interface
+ * Camera Module Implementation for ESP32-S3
+ * OceanLabz / ESP32-S3-EYE Camera Pin Configuration
  */
 
 #include "camera.h"
-#include "config.h"
+#include "../config.h"
 #include "esp_camera.h"
 
-// ESP32-S3-EYE / OceanLabz Board Camera Pin Definitions (OV2640)
+// ESP32-S3-EYE / OceanLabz Board Camera Pin Definitions
 #define PWDN_GPIO_NUM     -1  // Not used
 #define RESET_GPIO_NUM    -1  // Not used  
 #define XCLK_GPIO_NUM     15
@@ -35,11 +35,11 @@ bool initCamera() {
         return true;
     }
 
-    Serial.println("Initializing OV2640 camera (ESP32S3_EYE board)...");
+    Serial.println("Initializing camera (OceanLabz/ESP32S3-EYE pins)...");
     
     camera_config_t config = {};  // Initialize to zero!
     
-    // Use predefined pins from camera_pins.h for ESP32S3_EYE
+    // Use predefined pins from ESP32S3_EYE
     config.pin_pwdn = PWDN_GPIO_NUM;
     config.pin_reset = RESET_GPIO_NUM;
     config.pin_xclk = XCLK_GPIO_NUM;
@@ -79,14 +79,17 @@ bool initCamera() {
         return false;
     }
     
-    // Apply sensor settings for OV2640
-    s->set_vflip(s, 1);           // Flip vertically (fixes inverted image!)
-    s->set_brightness(s, 1);       // Increase brightness (0 is too dark)
+    // Apply sensor settings
+    s->set_brightness(s, 0);
     s->set_contrast(s, 0);
     s->set_saturation(s, 0);
-    s->set_whitebal(s, 1);        // AWB - Auto White Balance
-    s->set_exposure_ctrl(s, 1);   // AE - Auto Exposure  
-    s->set_gain_ctrl(s, 1);       // AGC - Auto Gain Control
+    s->set_whitebal(s, 1);        // AWB
+    s->set_exposure_ctrl(s, 1);   // AE
+    s->set_gain_ctrl(s, 1);       // AGC
+    
+    // Fix rotation - image was upside down
+    s->set_hmirror(s, 1);         // Horizontal mirror
+    s->set_vflip(s, 1);           // Vertical flip (fixes upside-down)
     
     Serial.println("Camera initialized!");
     cameraInitialized = true;
@@ -111,8 +114,18 @@ bool captureImage(uint8_t** buffer, size_t* size) {
 }
 
 camera_fb_t* captureFrame() {
-    if (!cameraInitialized) return nullptr;
-    return esp_camera_fb_get();
+    if (!cameraInitialized) {
+        Serial.println("[Camera] ERROR: Camera not initialized!");
+        return nullptr;
+    }
+    
+    camera_fb_t* frame = esp_camera_fb_get();
+    if (!frame) {
+        Serial.println("[Camera] ERROR: esp_camera_fb_get returned NULL");
+    } else {
+        Serial.printf("[Camera] Got frame: %dx%d, %d bytes\n", frame->width, frame->height, frame->len);
+    }
+    return frame;
 }
 
 void returnFrame(camera_fb_t* frame) {
