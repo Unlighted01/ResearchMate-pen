@@ -8,6 +8,7 @@
 #include <WebServer.h>
 #include <Adafruit_NeoPixel.h>
 #include <ArduinoJson.h>
+#include <WiFiManager.h>
 #include "camera/camera.h"
 #include "display/display.h"
 #include "cloud/cloud.h"
@@ -96,6 +97,14 @@ void handleRoot() {
     
     html += "<div id='uploadStatus'></div>";
     
+    // --- [TO BE REMOVED LATER] VIRTUAL LCD START ---
+    html += "<div id='virtualLcd' style='background: #111; border: 2px solid #333; padding: 15px; border-radius: 8px; font-family: monospace; color: #00d4ff; margin-top: 20px;'>";
+    html += "<div>STATUS: <span id='lcdStatus' style='font-weight:bold; color: #fff;'>Ready</span></div>";
+    html += "<div>UPLOADS: <span id='lcdCount'>0</span></div>";
+    html += "<div>LAST CAPTURE: <span id='lcdTime'>Never</span></div>";
+    html += "</div>";
+    // --- [TO BE REMOVED LATER] VIRTUAL LCD END ---
+    
     html += "<script>";
     html += "var isPaired = " + String(isPaired ? "true" : "false") + ";";
     
@@ -127,6 +136,20 @@ void handleRoot() {
     
     html += "capture();";
     html += "if (!isPaired) setInterval(checkPairing, 5000);";
+    
+    // --- [TO BE REMOVED LATER] VIRTUAL LCD JS START ---
+    html += "function updateVirtualLcd() {";
+    html += "  fetch('/api/status').then(r => r.json()).then(data => {";
+    html += "    document.getElementById('lcdStatus').textContent = data.lastStatus;";
+    html += "    document.getElementById('lcdCount').textContent = data.totalItems;";
+    html += "    if(data.secondsSinceLastCapture > 0) {";
+    html += "       document.getElementById('lcdTime').textContent = data.secondsSinceLastCapture + ' sec ago';";
+    html += "    }";
+    html += "  }).catch(e => console.error(e));";
+    html += "}";
+    html += "setInterval(updateVirtualLcd, 2000);"; // Poll every 2 seconds
+    // --- [TO BE REMOVED LATER] VIRTUAL LCD JS END ---
+    
     html += "</script></body></html>";
     
     server.send(200, "text/html", html);
@@ -218,6 +241,26 @@ void handleUpload() {
     }
 }
 
+// --- [TO BE REMOVED LATER] VIRTUAL LCD ENDPOINT START ---
+void handleStatus() {
+    JsonDocument doc;
+    doc["totalItems"] = totalItemsUploaded;
+    doc["lastStatus"] = lastCaptureStatus;
+    
+    if (lastCaptureTimestamp > 0) {
+        doc["secondsSinceLastCapture"] = (millis() - lastCaptureTimestamp) / 1000;
+    } else {
+        doc["secondsSinceLastCapture"] = 0;
+    }
+    
+    doc["isPaired"] = isPaired;
+    
+    String response;
+    serializeJson(doc, response);
+    server.send(200, "application/json", response);
+}
+// --- [TO BE REMOVED LATER] VIRTUAL LCD ENDPOINT END ---
+
 void handlePairingStart() {
     char* code = startPairing();
     
@@ -283,10 +326,31 @@ void handleUnpair() {
 }
 
 // ============================================
+// WiFiManager Callbacks
+// ============================================
+
+void configModeCallback (WiFiManager *myWiFiManager) {
+  Serial.println("Entered config mode");
+  Serial.println(WiFi.softAPIP());
+  Serial.println(myWiFiManager->getConfigPortalSSID());
+  
+  displayWiFiSetup(myWiFiManager->getConfigPortalSSID().c_str());
+  
+  // Fast orange blinking for setup mode indication
+  led.setPixelColor(0, led.Color(255, 165, 0));
+  led.show();
+}
+
+// ============================================
 // Setup
 // ============================================
 
 void setup() {
+    // --- FUTURE SOFT POWER CONFIG ---
+    // If using a P-Channel MOSFET power latch circuit, keep the power ON.
+    // pinMode(POWER_LATCH_PIN, OUTPUT);
+    // digitalWrite(POWER_LATCH_PIN, HIGH); // Latch power ON
+
     delay(5000);
     Serial.begin(115200);
     delay(2000);
@@ -347,18 +411,26 @@ void setup() {
     led.setPixelColor(0, led.Color(255, 165, 0));
     led.show();
     
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
-        delay(500);
-        Serial.print(".");
-        attempts++;
+    WiFiManager wifiManager;
+    wifiManager.setAPCallback(configModeCallback);
+    // Optional: timeout to prevent getting stuck in portal mode forever
+    // wifiManager.setConfigPortalTimeout(180); 
+    
+    // AutoConnect does the magic
+    if(!wifiManager.autoConnect(AP_NAME)) {
+        Serial.println("Failed to connect and hit timeout");
+        displayError("WiFi Failed");
+        led.setPixelColor(0, led.Color(255, 0, 0));
+        led.show();
+        delay(3000);
+        ESP.restart(); // Reset and try again
     }
+    
     Serial.println();
     
     if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("[OK] WiFi connected! IP: %s\n", WiFi.localIP().toString().c_str());
-        displayWiFiInfo(WiFi.localIP().toString().c_str(), WIFI_SSID);
+        displayWiFiInfo(WiFi.localIP().toString().c_str(), WiFi.SSID().c_str());
         led.setPixelColor(0, led.Color(0, 0, 255));
         led.show();
         delay(2000);
@@ -395,6 +467,9 @@ void setup() {
     server.on("/api/pairing-start", HTTP_POST, handlePairingStart);
     server.on("/api/pairing-status", HTTP_GET, handlePairingStatus);
     server.on("/api/unpair", HTTP_POST, handleUnpair);
+    // --- [TO BE REMOVED LATER] ---
+    server.on("/api/status", HTTP_GET, handleStatus);
+    // ----------------------------
     server.begin();
     
     Serial.println("\n=== READY ===");
@@ -430,6 +505,26 @@ void loop() {
     }
     
     lastButtonState = currentButtonState;
+    
+    /*
+    // --- FUTURE POWER OFF LOGIC ---
+    // Detect long press (> 3 seconds) on CAPTURE_BUTTON_PIN to power off
+    static unsigned long pressDuration = 0;
+    if (currentButtonState == LOW) { // Button held down
+        if (pressDuration == 0) pressDuration = millis();
+        else if (millis() - pressDuration > 3000) {
+            Serial.println("[Power] Powering off...");
+            displayStatus("Powering Off...");
+            led.setPixelColor(0, led.Color(255, 0, 0));
+            led.show();
+            delay(1000);
+            // digitalWrite(POWER_LATCH_PIN, LOW); // Kill power to self
+            while(1); // Wait for death
+        }
+    } else {
+        pressDuration = 0;
+    }
+    */
     
     // Periodic debug display update (every 5 seconds)
     static unsigned long lastDebugUpdate = 0;

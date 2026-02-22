@@ -214,6 +214,29 @@ void displayWiFiInfo(const char* ip, const char* ssid) {
     tft.drawString(ip, W - 25, 160);
 }
 
+void displayWiFiSetup(const char* apName) {
+    if (!displayInitialized) return;
+    
+    clearScreen();
+    drawHeader();
+    drawStatusBar("[!] Setup Mode", ORANGE);
+    
+    // Info panel
+    drawPanel(110, 130);
+    
+    tft.setTextColor(GRAY);
+    tft.setTextDatum(middle_center);
+    tft.drawString("Connect phone to WiFi:", W/2, 135);
+    
+    tft.setTextColor(ORANGE);
+    tft.setTextSize(2);
+    tft.drawString(apName, W/2, 175);
+    tft.setTextSize(1);
+    
+    tft.setTextColor(CYAN);
+    tft.drawString("to configure internet", W/2, 220);
+}
+
 void displayPairingCode(const char* code) {
     if (!displayInitialized) return;
     

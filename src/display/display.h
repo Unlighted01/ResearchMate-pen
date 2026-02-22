@@ -20,6 +20,9 @@ void displayStatus(const char* message);
 // Show WiFi connection info
 void displayWiFiInfo(const char* ip, const char* ssid);
 
+// Show WiFi Setup (Captive Portal) instructions
+void displayWiFiSetup(const char* apName);
+
 // Show camera status
 void displayCameraStatus(bool working);
 
