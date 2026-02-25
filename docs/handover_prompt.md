@@ -12,8 +12,11 @@ The firmware is fully functional. The "Infinite Capture Loop", "Camera malloc fa
     - **Quick Tap:** Captures and displays a preview on the LCD.
     - **Double Tap:** Captures and uploads to Supabase Cloud.
     - **Long Press (>800ms):** Captures and saves directly to the offline SD Card queue (`handleSDCapture`).
-4.  **Web Interface:** Serves pairing codes and handles manual triggers. (Currently investigating potential Modem Sleep drops on Port 80).
+4.  **Web Interface:** Serves pairing codes and handles manual triggers. (Currently moved to Port 8080, but still unreachable—suspect AP isolation or Modem Sleep).
 5.  **Cloud:** Uploads large multipart image binaries successfully. The `HTTPClient` timeout has been safely extended to 30s to accommodate cold-starts on Supabase Edge functions.
+6.  **Offline SD Card Queuing:** (WORKING)
+    - **Hardware:** MicroSD Card Module (SPI) connected to pins (`CS:42`, `MOSI:41`, `MISO:40`, `CLK:39`).
+    - **Logic:** Successfully writes `image/jpeg` byte buffers to physical storage (`/queue/scan_...jpg`) when requested.
 
 ### 🛠️ Hardware Configuration (CRITICAL)
 
@@ -27,7 +30,7 @@ The firmware is fully functional. The "Infinite Capture Loop", "Camera malloc fa
 - **Memory Allocation Crash (`0xffffffff`):** Enabled PSRAM compiler flags. Camera driver now successfully allocates the 640x480 frame buffer into SPIRAM.
 - **Library Migration:** Replaced `LovyanGFX` with `TFT_eSPI` to resolve `sdkconfig.h` compilation errors on newer ESP32 Arduino Cores (v3.0+).
 - **HTTP Timeout Bug:** Fixed `read Timeout` on Superbase uploads by extending the Arduino timeout threshold from 5 to 30 seconds.
-- **SD Card SPI Conflict:** Disabled TFT_MISO (`-1`) to free up pin overlap causing `sdSelectCard Failed` errors.
+- **SD Card SPI Conflict & Mount Failures:** Disabled TFT_MISO (`-1`) to free up pin overlap. Migrated the SD Card from `FSPI` to `HSPI` to stop collisions with `TFT_eSPI`. Also added explicit pull-ups and lowered the initialization frequency to 1MHz for stability.
 
 ### ⚙️ How `platformio.ini` Works
 
@@ -47,6 +50,6 @@ The `platformio.ini` file controls the entire firmware build environment. Here's
 
 ### ⏭️ Next Steps: WebServer Stability
 
-While the hardware and memory are stable, the device occasionally drops incoming HTML requests to the WebServer. Next debugging focus:
-1.  **Port Allocation:** Check if `WiFiManager`'s temporary AP portal is failing to relinquish Port 80.
+While the hardware and memory are stable, the WebServer remains unreachable despite moving it to Port 8080 and verifying Wi-Fi connectivity. Next debugging focus:
+1.  **AP Isolation / Local Network:** The `ping` command from the PC returned "Destination Host Unreachable", suggesting the home router's AP Isolation or a Guest Network policy is blocking cross-device TCP routing.
 2.  **Anti-Sleep:** Further investigate aggressive RTOS modem-sleep disabling to prevent the Wi-Fi transceiver from ignoring pings.

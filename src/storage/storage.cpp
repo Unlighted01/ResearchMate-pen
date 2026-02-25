@@ -3,7 +3,7 @@
 #include <esp_heap_caps.h>
 
 // Define a custom SPI class instance for the SD card
-SPIClass sdSPI(FSPI);
+SPIClass sdSPI(HSPI);
 
 #define LOG_DEBUG(fmt, ...) Serial.printf(fmt "\n", ##__VA_ARGS__)
 #define LOG_ERROR(fmt, ...) Serial.printf("[ERROR] " fmt "\n", ##__VA_ARGS__)
@@ -11,11 +11,18 @@ SPIClass sdSPI(FSPI);
 static bool sdCardInitialized = false;
 
 bool initSDCard() {
+  // Explicitly pull CS HIGH before SPI init to prevent floating state failures
+  pinMode(SD_CS, OUTPUT);
+  digitalWrite(SD_CS, HIGH);
+
+  // Many SD modules (especially MicroSD adapters) require a pull-up on MISO
+  pinMode(SD_MISO, INPUT_PULLUP);
+
   // Initialize SPI bus for SD Card using configured pins
   sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
 
-  // Initialize SD card at 4MHz for stable jumping
-  if (!SD.begin(SD_CS, sdSPI, 4000000)) {
+  // Initialize SD card at a very conservative 1MHz for stable mounting
+  if (!SD.begin(SD_CS, sdSPI, 1000000)) {
     LOG_ERROR("[SD] Card Mount Failed or Not Inserted");
     sdCardInitialized = false;
     return false;

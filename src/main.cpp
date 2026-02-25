@@ -15,7 +15,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 
-WebServer server(80);
+WebServer server(8080);
 Adafruit_NeoPixel led(1, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 // Global state
@@ -239,9 +239,6 @@ void handleSDCapture() {
     return;
   }
 
-  Serial.printf("[Camera] Got frame: %dx%d, %d bytes\n", fb->width, fb->height,
-                fb->len);
-
   displayUploading(50); // Show "Saving..." roughly
   String filename = saveImageToSD(fb->buf, fb->len);
   returnFrame(fb);
@@ -428,6 +425,24 @@ void handleUnpair() {
   led.show();
 }
 
+void handleFactoryReset() {
+  Serial.println("[System] Factory resetting Wi-Fi and Cloud credentials...");
+  displayStatus("Resetting...");
+
+  // Wipe Cloud Pairing
+  clearAuthToken();
+  isPaired = false;
+
+  // Wipe Wi-Fi Manager Settings
+  WiFiManager wm;
+  wm.resetSettings();
+
+  server.send(200, "text/plain",
+              "Factory Reset Complete! Rebooting into AP Setup Mode...");
+  delay(1000);
+  ESP.restart();
+}
+
 // ============================================
 // WiFiManager Callbacks
 // ============================================
@@ -586,7 +601,7 @@ void setup() {
   server.begin();
 
   Serial.println("\n=== READY ===");
-  Serial.printf("Open: http://%s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("Open: http://%s:8080\n", WiFi.localIP().toString().c_str());
 }
 
 // Button debouncing and multi-press tracking
@@ -632,9 +647,7 @@ void loop() {
         (millis() - buttonPressStartTime > LONG_PRESS_TIME)) {
       Serial.println("[Button] LONG PRESS Detected: Saving to SD Card!");
       displayStatus("Saving to SD...");
-      // For now, trigger standard capture but we can wire this specifically to
-      // SD later
-      handleCapture();
+      handleSDCapture();
       longPressHandled = true;
       buttonPressCount = 0; // Reset count since this was a long press
     }
@@ -645,7 +658,10 @@ void loop() {
       (millis() - buttonReleaseTime > DOUBLE_PRESS_GAP)) {
     if (buttonPressCount == 1) {
       Serial.println("[Button] SINGLE PRESS Detected: Capturing Preview!");
-      handleCapture(); // Just capture a preview to the TFT
+      displayCaptureFlash();
+      camera_fb_t *fb = captureFrame();
+      if (fb)
+        returnFrame(fb);
     } else if (buttonPressCount == 2) {
       Serial.println("[Button] DOUBLE PRESS Detected: Uploading to Cloud!");
       displayStatus("Uploading...");
