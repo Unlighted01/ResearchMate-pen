@@ -2,56 +2,51 @@
 
 ## 🚀 Current Status: STABLE & WORKING
 
-The firmware is fully functional. The "Infinite Capture Loop" issue has been resolved.
+The firmware is fully functional. The "Infinite Capture Loop", "Camera malloc failed", and "Display Driver Conflicts" have all been successfully resolved.
 
 ### ✅ Key Features Working:
 
-1.  **Camera:** OV5640 initializes and captures images correctly.
-2.  **Display:** ST7789 TFT shows live status, debug info, and "Blue Flash" on capture.
-3.  **Button:** **BOOT Button (GPIO 0)** triggers capture/upload.
-    - **Logic:** Press & Release -> Capture -> Upload to Supabase.
-4.  **Web Interface:** Simplified to "Capture Preview" and "Upload" buttons (Auto-refresh removed to prevent loops).
-5.  **Cloud:** Successfully uploads images to Supabase storage.
-6.  **Offline SD Card Queuing:** (CODE WRITTEN - AWAITING USER HARDWARE TEST)
-    - **Current State:** The SPI logic (`src/storage/storage.cpp`), cloud routing (`cloud.cpp`), and sync timer (`main.cpp`) have been fully written. However, the user had to step away before physically compiling or testing the SD Card integration. It is UNVERIFIED on hardware.
-    - **Hardware:** MicroSD Card Module (SPI) connected to JTAG pins (`CS:42`, `MOSI:41`, `MISO:40`, `CLK:39`).
-    - **Logic:** Automatically writes `image/jpeg` byte buffers to physical storage if Wi-Fi is disconnected during capture.
-    - **Syncing:** A 10-second background polling timer in `main.cpp` automatically flushes cached photos back to Supabase the moment the connection is restored.
+1.  **Camera:** OV5640/OV2640 initializes and captures images correctly. Frame buffer allocation now utilizes PSRAM to prevent memory exhaustion, with a fallback to DRAM.
+2.  **Display:** LCD initialization is now driven by `TFT_eSPI` (migrated from LovyanGFX for better compatibility with newer ESP32 cores).
+3.  **Multi-Function Button:** The capture button has been moved to **GPIO 1** (Standard Digital Input) to avoid conflicts with the BOOT button (GPIO 0).
+    - **Quick Tap:** Captures and displays a preview on the LCD.
+    - **Double Tap:** Captures and uploads to Supabase Cloud.
+    - **Long Press (>800ms):** Captures and saves directly to the offline SD Card queue (`handleSDCapture`).
+4.  **Web Interface:** Serves pairing codes and handles manual triggers. (Currently investigating potential Modem Sleep drops on Port 80).
+5.  **Cloud:** Uploads large multipart image binaries successfully. The `HTTPClient` timeout has been safely extended to 30s to accommodate cold-starts on Supabase Edge functions.
 
 ### 🛠️ Hardware Configuration (CRITICAL)
 
-- **Board:** ESP32-S3-WROOM-N16R8-CAM (Freenove/Generic style)
-- **Camera:** OV2640 (Custom pin mapping in `config.h`, NOT standard AI-Thinker)
-- **Display:** ST7789 (Pins: MOSI=11, CLK=13, CS=10, DC=14, BL=8)
-- **SD Card SPI:** (Pins: CS=42, MOSI=41, MISO=40, SCK=39)
-- **Capture Button:** **GPIO 0** (The on-board **BOOT** button).
-  - _Note: Previously tried GPIO 19 but it conflicted with USB D-._
+- **Board:** ESP32-S3-WROOM-N16R8-CAM (8MB Flash, external PSRAM)
+- **Display:** TFT_eSPI Library used. (Pins defined in `platformio.ini`: CS=38, DC=14, RST=21, MOSI=11, SCK=13, MISO=-1)
+- **SD Card SPI:** (Pins: CS=42, MOSI=41, MISO=40, SCK=39) - Note: carefully isolated from Camera I2C lanes.
+- **Capture Button:** **GPIO 1** (Wired direct to GND, uses internal `INPUT_PULLUP`).
 
-### 🧩 Recent Fixes (The "Ghost Button" Saga)
+### 🧩 Recent Fixes & Changes
 
-- **Issue:** Device was infinitely capturing/uploading.
-- **Cause 1:** GPIO 19 (USB D-) was used for button, triggering on USB traffic. -> **Fixed by moving to GPIO 0.**
-- **Cause 2:** Web Interface "Auto" mode was left on. -> **Fixed by removing Auto button from HTML.**
-- **Cause 3:** Interrupts were too sensitive. -> **Fixed by using Polling in `loop()`.**
+- **Memory Allocation Crash (`0xffffffff`):** Enabled PSRAM compiler flags. Camera driver now successfully allocates the 640x480 frame buffer into SPIRAM.
+- **Library Migration:** Replaced `LovyanGFX` with `TFT_eSPI` to resolve `sdkconfig.h` compilation errors on newer ESP32 Arduino Cores (v3.0+).
+- **HTTP Timeout Bug:** Fixed `read Timeout` on Superbase uploads by extending the Arduino timeout threshold from 5 to 30 seconds.
+- **SD Card SPI Conflict:** Disabled TFT_MISO (`-1`) to free up pin overlap causing `sdSelectCard Failed` errors.
+
+### ⚙️ How `platformio.ini` Works
+
+The `platformio.ini` file controls the entire firmware build environment. Here's what we changed:
+- **`platform = espressif32@6.5.0`:** Locks the SDK to a stable, tested version.
+- **`-DBOARD_HAS_PSRAM`:** Essential flag that tells the ESP32 linker to map the external RAM chip, completely resolving the camera's `malloc` crashes.
+- **`TFT_eSPI` configurations:** Display pins and drivers (ILI9341/ST7789) are defined directly in `build_flags` here instead of a separate `User_Setup.h` file for easier cross-compilation tracking.
 
 ### 📂 Code Structure
 
-- `src/main.cpp`: Main logic, Web Server, Button Polling, SD SDync Task Loop.
-- `src/config.h`: **ALL Pin Definitions are here.** (Camera, Display, Button, SD).
-- `src/camera/`: Camera driver (customized for this board).
-- `src/display/`: LovyanGFX driver & Debug UI.
-- `src/cloud/`: Supabase Authentication & SD Queue logic.
-- `src/storage/`: SD Card SPI format and Queue abstraction.
+- `src/main.cpp`: Main logic, Web Server routing, and the Multi-Tap Button logic (`loop()`).
+- `src/config.h`: Centralized pin definitions.
+- `src/camera/`: Camera HAL driver (gracefully falls back to DRAM if PSRAM vanishes).
+- `src/display/`: Cleaned up to wrap `TFT_eSPI` drawing calls.
+- `src/cloud/`: Supabase Authentication & multipart HTTP uploads (30s timeout).
+- `src/storage/`: SD Card SPI format and offline Queue abstraction (`saveImageToSD`).
 
-### ⏭️ Next Steps: Hardware Finalization
+### ⏭️ Next Steps: WebServer Stability
 
-The foundational offline caching logic is now complete. To finish the production-ready "Smart Pen", the following features must be built:
-
-1.  **ESP32 Power Management (Priority 1):**
-    - **Goal:** Implement deep sleep states to conserve battery when the pen is idle.
-    - **Action:** Track capture instances, map idle time, and program the ESP32 to drop to micro-amp power draw when not in use, waking instantly upon a button press.
-2.  **Stabilize Camera Frame Geometry (Priority 2):**
-    - **Goal:** Lock in the perfect UXGA/VGA streaming balance.
-    - **Action:** Ensure the centralized OCR API receives the highest clarity possible without triggering an Out-Of-Memory (OOM) crash on the ESP32 hardware.
-
-**"The Ghost is Busted, and the AI Pipeline is Live. Good luck!"** 👻🚀
+While the hardware and memory are stable, the device occasionally drops incoming HTML requests to the WebServer. Next debugging focus:
+1.  **Port Allocation:** Check if `WiFiManager`'s temporary AP portal is failing to relinquish Port 80.
+2.  **Anti-Sleep:** Further investigate aggressive RTOS modem-sleep disabling to prevent the Wi-Fi transceiver from ignoring pings.
