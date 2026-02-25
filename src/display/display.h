@@ -15,25 +15,25 @@ bool initDisplay();
 void clearDisplay();
 
 // Show a status message on display
-void displayStatus(const char* message);
+void displayStatus(const char *message);
 
 // Show WiFi connection info
-void displayWiFiInfo(const char* ip, const char* ssid);
+void displayWiFiInfo(const char *ip, const char *ssid);
 
 // Show WiFi Setup (Captive Portal) instructions
-void displayWiFiSetup(const char* apName);
+void displayWiFiSetup(const char *apName);
 
 // Show camera status
 void displayCameraStatus(bool working);
 
 // Show an error message
-void displayError(const char* error);
+void displayError(const char *error);
 
 // Show success/ready state
 void displaySuccess();
 
 // Show pairing code prominently
-void displayPairingCode(const char* code);
+void displayPairingCode(const char *code);
 
 // Show scanning animation
 void displayScanning();
@@ -48,15 +48,22 @@ void displayUploadComplete();
 void displayTestPattern();
 
 // Color demo for continuous cycling
-void displayColorDemo(uint16_t color, const char* colorName);
+void displayColorDemo(uint16_t color, const char *colorName);
 
 // Show SD card status
-void displaySDCardStatus(bool available, const char* info);
+void displaySDCardStatus(bool available, const char *info);
 
 // Show camera debug info (item count, status, time)
-void displayCameraDebug(int itemCount, const char* lastStatus, unsigned long lastCaptureTime);
+void displayCameraDebug(int itemCount, const char *lastStatus,
+                        unsigned long lastCaptureTime);
 
 // Flash screen when capturing (visual feedback)
 void displayCaptureFlash();
+
+// Draw a raw JPEG frame onto the screen
+void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len);
+
+// Restore the screen back to a ready/idle visual state
+void displayReady();
 
 #endif // DISPLAY_H

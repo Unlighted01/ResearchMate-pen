@@ -22,6 +22,7 @@ Adafruit_NeoPixel led(1, LED_PIN, NEO_GRB + NEO_KHZ800);
 static char lastCapturedFilename[64] = {0};
 static char pairingCode[16] = {0};
 static bool isPaired = false;
+static bool livePreviewActive = false; // Add live preview state
 static unsigned long lastPairingCheck = 0;
 static const unsigned long PAIRING_CHECK_INTERVAL = 5000;
 
@@ -229,7 +230,22 @@ void handleSDCapture() {
   displayCaptureFlash();
   displayScanning();
 
+  // Give the SPI bus a moment to completely reset and allow the camera DMA to
+  // flush
+  delay(100);
+
+  // The live preview sometimes leaves a frame stuck in the buffer right as the
+  // button is pressed. Flush it once to guarantee a fresh, stable frame for the
+  // SD card.
   camera_fb_t *fb = captureFrame();
+  if (fb)
+    returnFrame(fb);
+
+  // Wait for the sensor line to restabilize
+  delay(50);
+
+  // Now grab the actual frame safely without dropping reference
+  fb = captureFrame();
   if (!fb) {
     Serial.println("[ERROR] SD Capture Failed: No frame available.");
     displayError("Capture Failed");
@@ -567,7 +583,8 @@ void setup() {
     if (getAuthToken()) {
       Serial.println("[OK] Already paired!");
       isPaired = true;
-      displaySuccess();
+      livePreviewActive = true;
+      displayReady();
       led.setPixelColor(0, led.Color(0, 255, 0));
       led.show();
     } else {
@@ -614,67 +631,81 @@ static bool longPressHandled = false;
 // Time thresholds (milliseconds)
 const unsigned long DEBOUNCE_TIME = 50;
 const unsigned long LONG_PRESS_TIME = 800;
-const unsigned long DOUBLE_PRESS_GAP = 250;
+const unsigned long DOUBLE_PRESS_GAP = 400;
 
-void loop() {
-  server.handleClient();
-
-  // Handle MULTI-FUNCTION CAPTURE button (GPIO 1)
-  // Assumes INPUT_PULLUP, so LOW means pressed
+void updateButtonState() {
   bool currentButtonState = (digitalRead(CAPTURE_BUTTON_PIN) == LOW);
 
   if (currentButtonState && !isButtonPressed) {
-    // Button just pressed down (Transition HIGH -> LOW)
     if (millis() - buttonReleaseTime > DEBOUNCE_TIME) {
       isButtonPressed = true;
       buttonPressStartTime = millis();
       longPressHandled = false;
     }
   } else if (!currentButtonState && isButtonPressed) {
-    // Button just released (Transition LOW -> HIGH)
     isButtonPressed = false;
     unsigned long pressDuration = millis() - buttonPressStartTime;
     buttonReleaseTime = millis();
 
-    if (!longPressHandled && pressDuration > DEBOUNCE_TIME) {
-      // It was a short press (not held long enough to trigger the long press
-      // action)
+    if (!longPressHandled && pressDuration > DEBOUNCE_TIME &&
+        pressDuration < LONG_PRESS_TIME) {
       buttonPressCount++;
     }
   } else if (currentButtonState && isButtonPressed) {
-    // Button is being held down
     if (!longPressHandled &&
         (millis() - buttonPressStartTime > LONG_PRESS_TIME)) {
+      livePreviewActive = false;
       Serial.println("[Button] LONG PRESS Detected: Saving to SD Card!");
       displayStatus("Saving to SD...");
       handleSDCapture();
+      displayReady();
+      livePreviewActive = true;
       longPressHandled = true;
-      buttonPressCount = 0; // Reset count since this was a long press
+      buttonPressCount = 0;
     }
   }
+}
 
-  // Check if the gap for a double-press has expired
+void evaluateButtonActions() {
   if (buttonPressCount > 0 && !isButtonPressed &&
       (millis() - buttonReleaseTime > DOUBLE_PRESS_GAP)) {
+    // CRITICAL: We only evaluate actions AFTER the double-press window expires.
+
     if (buttonPressCount == 1) {
+      livePreviewActive = false;
       Serial.println("[Button] SINGLE PRESS Detected: Capturing Preview!");
       displayCaptureFlash();
       camera_fb_t *fb = captureFrame();
       if (fb)
         returnFrame(fb);
-    } else if (buttonPressCount == 2) {
+      displayReady();
+      livePreviewActive = true;
+    } else if (buttonPressCount >= 2) {
+      livePreviewActive = false;
       Serial.println("[Button] DOUBLE PRESS Detected: Uploading to Cloud!");
       displayStatus("Uploading...");
       handleUpload(); // Capture and dispatch to Supabase
+      displayReady();
+      livePreviewActive = true;
     }
     buttonPressCount = 0; // Reset after handling
   }
+}
+
+void loop() {
+  server.handleClient();
+
+  // Continuously poll the button
+  updateButtonState();
+  evaluateButtonActions();
 
   // Periodic debug display update (every 5 seconds)
   static unsigned long lastDebugUpdate = 0;
   if (millis() - lastDebugUpdate > 5000) {
-    displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                       lastCaptureTimestamp);
+    if (!livePreviewActive) {
+      displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
+                         lastCaptureTimestamp);
+    }
     lastDebugUpdate = millis();
   }
 
@@ -686,11 +717,11 @@ void loop() {
       char *token = checkPairingStatus(pairingCode);
       if (token) {
         isPaired = true;
+        livePreviewActive = true;
         Serial.println("[OK] Device paired!");
-        displaySuccess();
+        displayReady();
         delay(500);
-        displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                           lastCaptureTimestamp);
+        displayReady(); // Clear again just to be safe before preview starts
         led.setPixelColor(0, led.Color(0, 255, 0));
         led.show();
       }
@@ -702,6 +733,17 @@ void loop() {
   if (millis() - lastSyncCheck > 10000) {
     lastSyncCheck = millis();
     syncPendingQueue();
+  }
+
+  // --- LIVE CAMERA PREVIEW ---
+  // Suspend camera pulling during double-press gap to allow fast polling of
+  // button
+  if (isPaired && livePreviewActive && buttonPressCount == 0) {
+    camera_fb_t *fb = captureFrame();
+    if (fb) {
+      displayDrawFrame(fb->buf, fb->len);
+      returnFrame(fb);
+    }
   }
 
   delay(10);

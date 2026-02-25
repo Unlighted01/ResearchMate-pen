@@ -9,7 +9,6 @@
 #include "esp_camera.h"
 #include <Arduino.h>
 
-
 // ESP32-S3-EYE Camera Pin Definitions (Original Layout)
 #define PWDN_GPIO_NUM -1  // Not used
 #define RESET_GPIO_NUM -1 // Not used
@@ -61,12 +60,16 @@ bool initCamera() {
   config.pin_href = HREF_GPIO_NUM;
   config.pin_pclk = PCLK_GPIO_NUM;
 
-  // Camera configuration
-  config.xclk_freq_hz = 20000000; // 20MHz XCLK
+  // Camera configuration - optimized for cool thermal output and max OCR
+  // readability
+  config.xclk_freq_hz =
+      10000000; // 10MHz XCLK halves framerate to ~15FPS, vastly reducing heat
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_VGA; // 640x480
+  config.frame_size =
+      FRAMESIZE_UXGA;       // 1600x1200 HD resolution for crystal clear OCR
   config.jpeg_quality = 12; // Adjusted back to 12 since we have safety buffers
-  config.fb_count = 1;
+  config.fb_count =
+      2; // Increased to 2 to prevent DMA pipe collapse returning NULL
 
   // CRUCIAL MEMORY FIX: Force buffer allocation into internal RAM first!
   // Prevents 'cam_dma_config(300): frame buffer malloc failed' on WROOM chips
@@ -78,6 +81,8 @@ bool initCamera() {
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
+  // Use WHEN_EMPTY to remain compatible with older esp32-camera Arduino
+  // libraries
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
   // Initialize camera
@@ -102,7 +107,7 @@ bool initCamera() {
   s->set_gain_ctrl(s, 1);     // AGC
 
   // Fix rotation - image was upside down
-  s->set_hmirror(s, 1); // Horizontal mirror
+  s->set_hmirror(s, 0); // Horizontal mirror disabled (fixes mirror issue)
   s->set_vflip(s, 1);   // Vertical flip (fixes upside-down)
 
   Serial.println("Camera initialized!");
@@ -136,9 +141,6 @@ camera_fb_t *captureFrame() {
   camera_fb_t *frame = esp_camera_fb_get();
   if (!frame) {
     Serial.println("[Camera] ERROR: esp_camera_fb_get returned NULL");
-  } else {
-    Serial.printf("[Camera] Got frame: %dx%d, %d bytes\n", frame->width,
-                  frame->height, frame->len);
   }
   return frame;
 }

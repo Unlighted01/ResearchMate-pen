@@ -13,10 +13,14 @@ The firmware is fully functional. The "Infinite Capture Loop", "Camera malloc fa
     - **Double Tap:** Captures and uploads to Supabase Cloud.
     - **Long Press (>800ms):** Captures and saves directly to the offline SD Card queue (`handleSDCapture`).
 4.  **Web Interface:** Serves pairing codes and handles manual triggers. (Currently moved to Port 8080, but still unreachable—suspect AP isolation or Modem Sleep).
-5.  **Cloud:** Uploads large multipart image binaries successfully. The `HTTPClient` timeout has been safely extended to 30s to accommodate cold-starts on Supabase Edge functions.
+5.  **Cloud:** Uploads large multipart image binaries successfully. The `HTTPClient` timeout has been safely extended to 30s to accommodate cold-starts on Supabase Edge functions. Initial AI summaries are skipped explicitly to speed up uploads.
 6.  **Offline SD Card Queuing:** (WORKING)
     - **Hardware:** MicroSD Card Module (SPI) connected to pins (`CS:42`, `MOSI:41`, `MISO:40`, `CLK:39`).
     - **Logic:** Successfully writes `image/jpeg` byte buffers to physical storage (`/queue/scan_...jpg`) when requested.
+7.  **Optical Character Recognition (OCR) Engine Hardware Params:**
+    - **Resolution:** Permanently locked to `FRAMESIZE_UXGA` (1600x1200) for high fidelity text.
+    - **Thermal Governance:** The camera's master clock `config.xclk_freq_hz` is strictly limited to `10000000` (10MHz) to cut the framerate to ~15FPS. This prevents the ESP32 from overheating while streaming the UXGA buffers.
+    - **LCD Scaling:** The live preview renders immediately at 400x300 by explicitly passing `TJpgDec.setJpgScale(4)`. We use passive display downscaling rather than driver-level resizing to eliminate memory crashes and shutter lag.
 
 ### 🛠️ Hardware Configuration (CRITICAL)
 
@@ -30,7 +34,8 @@ The firmware is fully functional. The "Infinite Capture Loop", "Camera malloc fa
 - **Memory Allocation Crash (`0xffffffff`):** Enabled PSRAM compiler flags. Camera driver now successfully allocates the 640x480 frame buffer into SPIRAM.
 - **Library Migration:** Replaced `LovyanGFX` with `TFT_eSPI` to resolve `sdkconfig.h` compilation errors on newer ESP32 Arduino Cores (v3.0+).
 - **HTTP Timeout Bug:** Fixed `read Timeout` on Superbase uploads by extending the Arduino timeout threshold from 5 to 30 seconds.
-- **SD Card SPI Conflict & Mount Failures:** Disabled TFT_MISO (`-1`) to free up pin overlap. Migrated the SD Card from `FSPI` to `HSPI` to stop collisions with `TFT_eSPI`. Also added explicit pull-ups and lowered the initialization frequency to 1MHz for stability.
+- **SD Card SPI Conflict & Mount Failures:** Disabled TFT_MISO (`-1`) to free up pin overlap. Modified `sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, -1)` to force manual Chip Select control by the `SD` library, preventing hardware SPIdriver lockouts when the live camera feed interrupts the CPU.
+- **USB CDC "OS Error 22" Crash Loops:** Diagnosed that infinite reboot loops during `setup()` instantly break the ESP32-S3's internal USB CDC serial, causing the COM port to disappear. Documented the manual BOOT+RST hardware recovery procedure.
 
 ### ⚙️ How `platformio.ini` Works
 

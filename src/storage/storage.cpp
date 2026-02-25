@@ -19,7 +19,10 @@ bool initSDCard() {
   pinMode(SD_MISO, INPUT_PULLUP);
 
   // Initialize SPI bus for SD Card using configured pins
-  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  // CRITICAL: We pass -1 for CS because the SD library MUST manually control
+  // the CS pin over long multi-byte transactions. If we give it to hardware
+  // SPI, it violently rapid-fires.
+  sdSPI.begin(SD_SCK, SD_MISO, SD_MOSI, -1);
 
   // Initialize SD card at a very conservative 1MHz for stable mounting
   if (!SD.begin(SD_CS, sdSPI, 1000000)) {

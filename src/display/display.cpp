@@ -6,12 +6,30 @@
 #include "../config.h"
 #include <SPI.h>
 #include <TFT_eSPI.h>
+#include <TJpg_Decoder.h>
 #include <WiFi.h>
 
 // Initialize display with hardware SPI
 TFT_eSPI tft = TFT_eSPI();
 
 static bool displayInitialized = false;
+
+// Add forward declaration for button updater so TJpgDec can use it
+extern void updateButtonState();
+
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h,
+                uint16_t *bitmap) {
+  // Ultra-fast poll of button during decode chunks
+  updateButtonState();
+
+  // Check if part of the image is completely off screen
+  if (y >= tft.height() || x >= tft.width())
+    return 1; // Return 1 to continue decoding next block
+
+  // Push the decoded block to the screen
+  tft.pushImage(x, y, w, h, bitmap);
+  return 1;
+}
 
 // ============================================
 // ResearchMate Color Palette (RGB565)
@@ -111,6 +129,12 @@ bool initDisplay() {
   tft.setRotation(0); // Normal orientation
   tft.fillScreen(BG_DARK);
   tft.setTextWrap(false);
+
+  // Initialize JPEG Decoder
+  TJpgDec.setJpgScale(
+      4); // Scale factor 4 native downsampling (1600x1200 -> 400x300)
+  TJpgDec.setSwapBytes(true); // RGB565 swap
+  TJpgDec.setCallback(tft_output);
 
   // Boot splash
   drawHeader();
@@ -466,4 +490,35 @@ void displayCaptureFlash() {
   delay(120);
 
   // Screen will be redrawn by next display update
+}
+
+void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len) {
+  if (!displayInitialized || !jpg_data)
+    return;
+
+  // Let's draw it from -80, 10 to properly center the 400x300 downscaled UXGA
+  // image on the 240x320 screen (400 - 240 = 160 -> -80 width clamp)
+  TJpgDec.drawJpg(-80, 10, jpg_data, jpg_len);
+
+  // CRITICAL FIX: Rapidly rendering JPEGs causes TFT_eSPI to hold the SPI bus
+  // Host clamping the CS hardware pin. We MUST forcibly end the transaction
+  // here so the SD card can use the SPI module safely later.
+  tft.endWrite();
+}
+
+void displayReady() {
+  if (!displayInitialized)
+    return;
+
+  // We don't want to clearScreen() here because `livePreviewActive` will
+  // immediately draw over it anyway, and `clearScreen()` takes time over SPI
+  // and causes black flickering / tearing. Let the live camera JPEG naturally
+  // draw over the screen
+  drawHeader();
+
+  // Bottom text hint (over a small background so it's readable)
+  tft.fillRect(0, H - 30, W, 30, BG_DARK);
+  tft.setTextColor(GRAY);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Press to Take Photo", W / 2, H - 15);
 }
