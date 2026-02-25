@@ -3,8 +3,10 @@
 
 #include <cstdint>
 
+/*
 bool initPower();
 void updateBatteryStatus();
 uint8_t getBatteryPercent();
+*/
 
 #endif

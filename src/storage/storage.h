@@ -1,11 +1,15 @@
 #ifndef STORAGE_H
 #define STORAGE_H
 
-#include <cstdint>
-#include <cstddef>
+#include <Arduino.h>
+#include <SPI.h>
+#include <SD.h>
+#include <FS.h>
 
 bool initSDCard();
-bool saveImage(const char* filename, uint8_t* data, size_t size);
-bool loadImage(const char* filename, uint8_t* buffer, size_t* size);
+String saveImageToSD(const uint8_t* data, size_t size);
+String getNextPendingUpload();
+bool deleteImageFromSD(const String& filename);
+uint8_t* readImageFromSD(const String& filename, size_t* outSize);
 
 #endif
