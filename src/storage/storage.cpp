@@ -161,3 +161,23 @@ uint8_t *readImageFromSD(const String &filename, size_t *outSize) {
   *outSize = size;
   return buffer;
 }
+
+void wipeOfflineQueue() {
+  File dir = SD.open("/queue");
+  if (!dir || !dir.isDirectory()) {
+    return;
+  }
+
+  File file = dir.openNextFile();
+  int count = 0;
+  while (file) {
+    String filename = String("/queue/") + file.name();
+    file.close(); // Close before deleting
+    if (SD.remove(filename.c_str())) {
+      count++;
+      LOG_DEBUG("[SD WIPE] Deleted %s", filename.c_str());
+    }
+    file = dir.openNextFile();
+  }
+  LOG_DEBUG("[SD WIPE] Wiped %d total files from queue.", count);
+}

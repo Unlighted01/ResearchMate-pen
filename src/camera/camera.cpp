@@ -79,11 +79,12 @@ bool initCamera() {
     Serial.println(
         "[Camera] No PSRAM detected! Falling back to internal SRAM...");
     config.fb_location = CAMERA_FB_IN_DRAM;
+    config.frame_size = FRAMESIZE_VGA; 
+    config.fb_count = 2; // Need 2 buffers so the preview doesn't lock the capture thread
   }
 
-  // Use WHEN_EMPTY to remain compatible with older esp32-camera Arduino
-  // libraries
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
+  // Use LATEST so it drops stale frames and always gives us the current snapshot
+  config.grab_mode = CAMERA_GRAB_LATEST;
 
   // Initialize camera
   esp_err_t err = esp_camera_init(&config);

@@ -5,20 +5,80 @@
 
 #include "../config.h"
 #include <SPI.h>
-#include <TFT_eSPI.h>
+#define LGFX_USE_V1
+#include <LovyanGFX.hpp>
 #include <TJpg_Decoder.h>
 #include <WiFi.h>
 
-// Initialize display with hardware SPI
-TFT_eSPI tft = TFT_eSPI();
+class LGFX : public lgfx::LGFX_Device
+{
+  lgfx::Panel_ILI9341 _panel_instance;
+  lgfx::Bus_SPI       _bus_instance;
+  lgfx::Light_PWM     _light_instance;
 
+public:
+  LGFX(void)
+  {
+    { 
+      auto cfg = _bus_instance.config();
+      cfg.spi_host = SPI2_HOST; // FSPI
+      cfg.spi_mode = 0;                  
+      cfg.freq_write = 27000000;         // Safe 27MHz for generic red PCB ILI9341
+      cfg.freq_read  = 16000000;
+      cfg.spi_3wire  = false;
+      cfg.use_lock   = true;
+      cfg.dma_channel = SPI_DMA_CH_AUTO; // Set DMA channel
+
+      cfg.pin_sclk = TFT_CLK;
+      cfg.pin_mosi = TFT_MOSI;
+      cfg.pin_miso = TFT_MISO;
+      cfg.pin_dc   = TFT_DC;
+
+      _bus_instance.config(cfg);
+      _panel_instance.setBus(&_bus_instance);
+    }
+    {
+      auto cfg = _panel_instance.config();
+      cfg.pin_cs           = TFT_CS;
+      cfg.pin_rst          = TFT_RST;
+      cfg.pin_busy         = -1;
+      cfg.panel_width      = 240;
+      cfg.panel_height     = 320;
+      cfg.offset_x         = 0;
+      cfg.offset_y         = 0;
+      cfg.offset_rotation  = 0;
+      cfg.dummy_read_pixel = 8;
+      cfg.dummy_read_bits  = 1;
+      cfg.readable         = true;
+      cfg.invert           = false; // Standard for ILI9341
+      cfg.rgb_order        = false; 
+      cfg.dlen_16bit       = false; 
+      cfg.bus_shared       = true;
+
+      _panel_instance.config(cfg);
+    }
+    {
+      auto cfg = _light_instance.config();
+      cfg.pin_bl = TFT_BL;
+      cfg.invert = false;
+      cfg.freq   = 44100;
+      cfg.pwm_channel = 7;
+
+      _light_instance.config(cfg);
+      _panel_instance.setLight(&_light_instance);
+    }
+
+    setPanel(&_panel_instance);
+  }
+};
+
+static LGFX tft;
 static bool displayInitialized = false;
 
 // Add forward declaration for button updater so TJpgDec can use it
 extern void updateButtonState();
 
-bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h,
-                uint16_t *bitmap) {
+bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
   // Ultra-fast poll of button during decode chunks
   updateButtonState();
 
@@ -26,8 +86,8 @@ bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h,
   if (y >= tft.height() || x >= tft.width())
     return 1; // Return 1 to continue decoding next block
 
-  // Push the decoded block to the screen
-  tft.pushImage(x, y, w, h, bitmap);
+  // Push the decoded block to the screen using LGFX format
+  tft.pushImage(x, y, w, h, (lgfx::rgb565_t*)bitmap);
   return 1;
 }
 
@@ -133,7 +193,7 @@ bool initDisplay() {
   // Initialize JPEG Decoder
   TJpgDec.setJpgScale(
       4); // Scale factor 4 native downsampling (1600x1200 -> 400x300)
-  TJpgDec.setSwapBytes(true); // RGB565 swap
+  TJpgDec.setSwapBytes(false); // LGFX handles RGB565 correctly natively
   TJpgDec.setCallback(tft_output);
 
   // Boot splash

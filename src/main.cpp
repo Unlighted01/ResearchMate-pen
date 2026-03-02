@@ -480,10 +480,7 @@ void configModeCallback(WiFiManager *myWiFiManager) {
 // ============================================
 
 void setup() {
-  // --- POWER LATCH CONFIG ---
-  // Turn on the N-Channel MOSFET instantly to keep the P-Channel open.
-  // pinMode(POWER_LATCH_PIN, OUTPUT);
-  // digitalWrite(POWER_LATCH_PIN, HIGH); // Latch power ON!
+  // Power latch disabled - booting directly when plugged in
 
   delay(5000);
   Serial.begin(115200);
@@ -494,8 +491,64 @@ void setup() {
   Serial.println("=== TFT Display + Camera ===");
   Serial.println("=================================\n");
 
-  // Capture button (GPIO 0)
+  // Capture button
   pinMode(CAPTURE_BUTTON_PIN, INPUT_PULLUP);
+
+  // === FACTORY RESET ON BOOT ===
+  // If the user holds the capture button while plugging in the device, we wipe everything
+  if (digitalRead(CAPTURE_BUTTON_PIN) == LOW) {
+    Serial.println("\n[!] FACTORY RESET DETECTED [!]");
+    Serial.println("Hold button for 5 seconds to wipe device...");
+    
+    // Light LED Red to indicate wipe mode is armed
+    led.begin();
+    led.setBrightness(100);
+    led.setPixelColor(0, led.Color(255, 0, 0));
+    led.show();
+
+    bool wipeConfirmed = true;
+    for (int i = 0; i < 50; i++) { // 100ms * 50 = 5 seconds
+      if (digitalRead(CAPTURE_BUTTON_PIN) == HIGH) {
+        wipeConfirmed = false;
+        Serial.println("Reset cancelled.");
+        break; // They let go, abort!
+      }
+      delay(100);
+    }
+
+    if (wipeConfirmed) {
+      Serial.println("\n[!] Wiping Device Credentials...");
+      
+      // 1. Wipe Supabase Auth Token
+      clearAuthToken(); 
+      
+      // 2. Wipe WiFi Credentials
+      WiFiManager wm;
+      wm.resetSettings();
+      delay(100);
+
+      // 3. Wipe SD Card Images
+      if (initSDCard()) {
+         Serial.println("[!] Wiping SD Card Queue...");
+         wipeOfflineQueue();
+      }
+
+      Serial.println("[!] Device Wiped Successfully.");
+      
+      // Flash Green rapidly 3 times to confirm
+      for (int i = 0; i < 3; i++) {
+        led.setPixelColor(0, led.Color(0, 255, 0));
+        led.show();
+        delay(200);
+        led.clear();
+        led.show();
+        delay(200);
+      }
+      
+      Serial.println("\nRebooting now...");
+      ESP.restart(); // Reboot into out-of-box state
+    }
+  }
 
   // Dedicated Power Button (GPIO 2)
   // pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
@@ -548,6 +601,11 @@ void setup() {
   displayStatus("WiFi connecting...");
   led.setPixelColor(0, led.Color(255, 165, 0));
   led.show();
+
+  // CRITICAL: Explicitly wake up the radio! If the pen was wiped previously,
+  // the radio was turned off and written to NVS persistence. It must be turned on.
+  WiFi.mode(WIFI_STA); 
+  delay(100);
 
   WiFiManager wifiManager;
   wifiManager.setAPCallback(configModeCallback);
@@ -655,9 +713,9 @@ void updateButtonState() {
     if (!longPressHandled &&
         (millis() - buttonPressStartTime > LONG_PRESS_TIME)) {
       livePreviewActive = false;
-      Serial.println("[Button] LONG PRESS Detected: Saving to SD Card!");
-      displayStatus("Saving to SD...");
-      handleSDCapture();
+      Serial.println("[Button] LONG PRESS Detected: Force Sync SD to Cloud!");
+      displayStatus("Syncing...");
+      syncPendingQueue();
       displayReady();
       livePreviewActive = true;
       longPressHandled = true;
@@ -673,11 +731,9 @@ void evaluateButtonActions() {
 
     if (buttonPressCount == 1) {
       livePreviewActive = false;
-      Serial.println("[Button] SINGLE PRESS Detected: Capturing Preview!");
-      displayCaptureFlash();
-      camera_fb_t *fb = captureFrame();
-      if (fb)
-        returnFrame(fb);
+      Serial.println("[Button] SINGLE PRESS Detected: Saving to SD Card!");
+      displayStatus("Saving to SD...");
+      handleSDCapture();
       displayReady();
       livePreviewActive = true;
     } else if (buttonPressCount >= 2) {

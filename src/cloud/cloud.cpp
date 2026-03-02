@@ -312,51 +312,89 @@ char *uploadImage(const uint8_t *imageData, size_t imageSize) {
   return NULL;
 }
 
+
+// Make HTTP request from a file stream to save memory during SD sync
+static bool httpRequestStream(const char *endpoint, File &file, size_t fileSize, char *responseOut, size_t responseMaxSize) {
+  if (!WiFi.isConnected()) return false;
+
+  HTTPClient http;
+  String url = String(SUPABASE_URL) + endpoint;
+  
+  LOG_DEBUG("[HTTP] POST Stream %s (size: %d)", url.c_str(), fileSize);
+  
+  // We MUST use a secure client for Supabase HTTPS routing
+  http.setReuse(false);
+  http.setTimeout(30000); // 30s timeout for slow SD reads and chunk uploads
+  http.begin(url);
+  
+  http.addHeader("Content-Type", "image/jpeg");
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);
+  http.addHeader("apikey", SUPABASE_ANON_KEY);
+
+  // Send the file stream directly without buffering it all into RAM
+  int httpCode = http.sendRequest("POST", &file, fileSize);
+
+  bool success = false;
+  if (httpCode > 0) {
+    LOG_DEBUG("[HTTP] Response code: %d", httpCode);
+    if (httpCode == HTTP_CODE_OK || httpCode == 200) {
+      String payload = http.getString();
+      size_t copySize = min(payload.length(), responseMaxSize - 1);
+      payload.toCharArray(responseOut, copySize + 1);
+      responseOut[copySize] = '\0';
+      success = true;
+    } else {
+      LOG_ERROR("[HTTP] Server Rejected File: %s", http.getString().c_str());
+    }
+  } else {
+    LOG_ERROR("[HTTP] Stream Connection failed: %s", http.errorToString(httpCode).c_str());
+  }
+
+  http.end();
+  return success;
+}
+
 void syncPendingQueue() {
-  if (!WiFi.isConnected())
-    return;
+  if (!WiFi.isConnected()) return;
   const char *token = getAuthToken();
-  if (!token)
-    return;
+  if (!token) return;
 
   String filename = getNextPendingUpload();
-  if (filename.length() == 0)
-    return; // Queue empty
+  if (filename.length() == 0) return; // Queue empty
 
   LOG_DEBUG("[Sync] Found pending offline upload: %s", filename.c_str());
 
-  size_t imageSize = 0;
-  uint8_t *imageData = readImageFromSD(filename, &imageSize);
-
-  if (!imageData || imageSize == 0) {
-    LOG_ERROR("[Sync] Failed to read from SD, deleting corrupt file");
+  // Instead of readImageFromSD which mallocs the whole file, just open it!
+  File file = SD.open(filename.c_str(), FILE_READ);
+  if (!file || file.size() == 0) {
+    LOG_ERROR("[Sync] Corrupt SD file, deleting: %s", filename.c_str());
+    if (file) file.close();
     deleteImageFromSD(filename);
     return;
   }
+  
+  size_t fileSize = file.size();
 
   // Build endpoint with auth token
   String endpoint = String("/functions/v1/smart-pen?token=") + token;
-
   memset(g_responseBuffer, 0, sizeof(g_responseBuffer));
-  bool ok = httpRequest("POST", endpoint.c_str(), "image/jpeg", imageData,
-                        imageSize, g_responseBuffer, sizeof(g_responseBuffer));
 
-  // Free the PSRAM chunk immediately
-  free(imageData);
+  // Stream directly from SD to WiFi
+  bool ok = httpRequestStream(endpoint.c_str(), file, fileSize, g_responseBuffer, sizeof(g_responseBuffer));
+  
+  file.close(); // Very important to close before deleting!
 
   if (ok) {
     JsonDocument doc;
     DeserializationError error = deserializeJson(doc, g_responseBuffer);
 
     if (!error && doc["success"]) {
-      LOG_DEBUG("[Sync] Successfully pushed %s, deleting from SD",
-                filename.c_str());
+      LOG_DEBUG("[Sync] Successfully pushed %s, deleting from SD", filename.c_str());
       deleteImageFromSD(filename);
     } else {
-      LOG_ERROR(
-          "[Sync] Server rejected the file, keeping it in queue for now.");
+      LOG_ERROR("[Sync] Server rejected the file, keeping it in queue for now.");
     }
   } else {
-    LOG_ERROR("[Sync] HTTP connection failed during sync round");
+    LOG_ERROR("[Sync] HTTP connection failed during stream sync round");
   }
 }

@@ -10,6 +10,7 @@ bool initSDCard();
 String saveImageToSD(const uint8_t* data, size_t size);
 String getNextPendingUpload();
 bool deleteImageFromSD(const String& filename);
+void wipeOfflineQueue();
 uint8_t* readImageFromSD(const String& filename, size_t* outSize);
 
 #endif
