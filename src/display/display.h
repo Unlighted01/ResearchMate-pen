@@ -14,54 +14,38 @@ bool initDisplay();
 // Clear the entire display
 void clearDisplay();
 
-// Show a status message on display
-void displayStatus(const char *message);
+// Set the global Wi-Fi status for the Top Bar
+void setWiFiStatus(bool connected);
 
-// Show WiFi connection info
-void displayWiFiInfo(const char *ip, const char *ssid);
+// Set the global Pairing status for the Top Bar
+void setPairingStatus(bool paired);
 
-// Show WiFi Setup (Captive Portal) instructions
-void displayWiFiSetup(const char *apName);
+// Set the main operation mode (e.g. "SETUP", "READY", "CAPTURING")
+void setUIMode(const char *mode);
 
-// Show camera status
-void displayCameraStatus(bool working);
+// Set the bottom offline item queue count
+void setQueueCount(int count);
 
-// Show an error message
-void displayError(const char *error);
+// Set the bottom panel "last action" text
+void setLastAction(const char *action, bool isError = false);
 
-// Show success/ready state
-void displaySuccess();
+// Draw the Top Status Bar
+void drawTopBar();
 
-// Show pairing code prominently
+// Draw the Bottom Action Panel
+void drawBottomPanel();
+
+// Show WiFi Setup QR Code centered in the viewfinder zone
+void displayWiFiSetupQR(const char *ssid);
+
+// Show pairing code prominently centered in the viewfinder zone
 void displayPairingCode(const char *code);
 
-// Show scanning animation
-void displayScanning();
-
-// Show upload progress
-void displayUploading(int progress);
-
-// Show upload complete
-void displayUploadComplete();
-
-// Simple test pattern
-void displayTestPattern();
-
-// Color demo for continuous cycling
-void displayColorDemo(uint16_t color, const char *colorName);
-
-// Show SD card status
-void displaySDCardStatus(bool available, const char *info);
-
-// Show camera debug info (item count, status, time)
-void displayCameraDebug(int itemCount, const char *lastStatus,
-                        unsigned long lastCaptureTime);
-
-// Flash screen when capturing (visual feedback)
-void displayCaptureFlash();
-
-// Draw a raw JPEG frame onto the screen
+// Draw a raw JPEG frame onto the screen, cropped to the 240x240 viewfinder
 void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len);
+
+// Flash screen when capturing (visual feedback) - restricted to viewfinder
+void displayCaptureFlash();
 
 // Restore the screen back to a ready/idle visual state
 void displayReady();

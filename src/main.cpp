@@ -228,7 +228,8 @@ void handleSDCapture() {
   Serial.println("[Capture] Acquiring frame for SD Card...");
 
   displayCaptureFlash();
-  displayScanning();
+  setLastAction("Scanning...", false);
+  drawBottomPanel();
 
   // Give the SPI bus a moment to completely reset and allow the camera DMA to
   // flush
@@ -248,36 +249,31 @@ void handleSDCapture() {
   fb = captureFrame();
   if (!fb) {
     Serial.println("[ERROR] SD Capture Failed: No frame available.");
-    displayError("Capture Failed");
-    strcpy(lastCaptureStatus, "Capture Error");
-    displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                       lastCaptureTimestamp);
+    setLastAction("Capture Error", true);
+    drawBottomPanel();
     return;
   }
 
-  displayUploading(50); // Show "Saving..." roughly
+  setLastAction("Saving...", false);
+  drawBottomPanel();
   String filename = saveImageToSD(fb->buf, fb->len);
   returnFrame(fb);
 
   if (filename.length() > 0) {
     Serial.printf("[Upload] Queued offline: %s\n", filename.c_str());
-    strcpy(lastCaptureStatus, "Saved to SD");
-    displayStatus("Saved to SD");
-    lastCaptureTimestamp = millis();
+    setLastAction("Saved to SD", false);
     totalItemsUploaded++; // Count as handled
+    setQueueCount(totalItemsUploaded);
+    drawBottomPanel();
 
     led.setPixelColor(0, led.Color(0, 255, 0)); // Green blink
     led.show();
     delay(500);
 
-    displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                       lastCaptureTimestamp);
   } else {
     Serial.println("[ERROR] Failed to save frame to SD Card memory.");
-    displayError("SD Save Failed");
-    strcpy(lastCaptureStatus, "SD Save Error");
-    displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                       lastCaptureTimestamp);
+    setLastAction("SD Save Error", true);
+    drawBottomPanel();
 
     led.setPixelColor(0, led.Color(255, 0, 0)); // Red blink
     led.show();
@@ -292,17 +288,16 @@ void handleUpload() {
   // Show capture flash for visual feedback
   displayCaptureFlash();
 
-  // Show scanning animation
-  displayScanning();
+  // Show status
+  setLastAction("Scanning...", false);
+  drawBottomPanel();
 
   camera_fb_t *fb = captureFrame();
   if (!fb) {
     Serial.println("[Upload] CAMERA BUFFER FAILED!");
-    displayError("Capture Failed");
-    strcpy(lastCaptureStatus, "Capture Error");
-    displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                       lastCaptureTimestamp);
-
+    setLastAction("Capture Error", true);
+    drawBottomPanel();
+    
     JsonDocument doc;
     doc["success"] = false;
     doc["error"] = "Camera capture failed";
@@ -312,8 +307,8 @@ void handleUpload() {
     return;
   }
 
-  displayUploading(50);
-  strcpy(lastCaptureStatus, "Uploading...");
+  setLastAction("Uploading...", false);
+  drawBottomPanel();
 
   Serial.println("[Upload] Dispatched to Cloud...");
   char *response = uploadImage(fb->buf, fb->len);
@@ -322,25 +317,20 @@ void handleUpload() {
   if (response) {
     // Success - update counters
     totalItemsUploaded++;
-    lastCaptureTimestamp = millis();
-    strcpy(lastCaptureStatus, "Upload OK");
+    setLastAction("Upload OK", false);
+    setQueueCount(totalItemsUploaded);
+    drawBottomPanel();
 
-    displayUploadComplete();
     server.send(200, "application/json", response);
     led.setPixelColor(0, led.Color(0, 255, 0));
     led.show();
     delay(1000);
 
-    // Show success with debug info
-    displaySuccess();
-    delay(500);
-    displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                       lastCaptureTimestamp);
   } else {
     // Failed - update status
-    strcpy(lastCaptureStatus, "Upload Failed");
-
-    displayError("Upload Failed");
+    setLastAction("Upload Failed", true);
+    drawBottomPanel();
+    
     JsonDocument doc;
     doc["success"] = false;
     doc["error"] = "Upload failed";
@@ -350,10 +340,6 @@ void handleUpload() {
     led.setPixelColor(0, led.Color(255, 0, 0));
     led.show();
     delay(1000);
-
-    // Show error with debug info
-    displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                       lastCaptureTimestamp);
   }
 }
 
@@ -403,7 +389,7 @@ void handlePairingStatus() {
     if (token) {
       isPaired = true;
       doc["paired"] = true;
-      displaySuccess();
+      displayReady();
       led.setPixelColor(0, led.Color(0, 255, 0));
       led.show();
     } else {
@@ -443,7 +429,10 @@ void handleUnpair() {
 
 void handleFactoryReset() {
   Serial.println("[System] Factory resetting Wi-Fi and Cloud credentials...");
-  displayStatus("Resetting...");
+  setUIMode("FACTORY RESET");
+  setLastAction("Wiping Data...", true);
+  drawTopBar();
+  drawBottomPanel();
 
   // Wipe Cloud Pairing
   clearAuthToken();
@@ -460,6 +449,54 @@ void handleFactoryReset() {
 }
 
 // ============================================
+// Asynchronous WiFi Connection Handler
+// ============================================
+static bool hasHandledConnect = false;
+
+void onWiFiConnected() {
+  if (hasHandledConnect) return;
+  hasHandledConnect = true;
+
+  Serial.printf("\n[OK] WiFi connected! IP: %s\n",
+                WiFi.localIP().toString().c_str());
+  setWiFiStatus(true);
+  setLastAction("WiFi Connected", false);
+  drawTopBar();
+  drawBottomPanel();
+
+  // Prevent the S3 WiFi modem from entering aggressive sleep routing
+  // which drops incoming TCP HTTP requests randomly
+  WiFi.setSleep(false);
+
+  led.setPixelColor(0, led.Color(0, 0, 255));
+  led.show();
+  delay(2000);
+
+  // Check pairing
+  if (getAuthToken()) {
+    Serial.println("[OK] Already paired!");
+    isPaired = true;
+    livePreviewActive = true;
+    displayReady();
+    led.setPixelColor(0, led.Color(0, 255, 0));
+    led.show();
+  } else {
+    Serial.println("[!] Not paired - starting pairing...");
+    char *code = startPairing();
+    if (code) {
+      strncpy(pairingCode, code, sizeof(pairingCode) - 1);
+      Serial.printf("Pairing code: %s\n", pairingCode);
+      displayPairingCode(pairingCode);
+      led.setPixelColor(0, led.Color(255, 165, 0));
+      led.show();
+    }
+  }
+
+  Serial.println("\n=== READY ===");
+  Serial.printf("Open: http://%s:8080\n", WiFi.localIP().toString().c_str());
+}
+
+// ============================================
 // WiFiManager Callbacks
 // ============================================
 
@@ -468,12 +505,18 @@ void configModeCallback(WiFiManager *myWiFiManager) {
   Serial.println(WiFi.softAPIP());
   Serial.println(myWiFiManager->getConfigPortalSSID());
 
-  displayWiFiSetup(myWiFiManager->getConfigPortalSSID().c_str());
+  displayWiFiSetupQR(myWiFiManager->getConfigPortalSSID().c_str());
 
   // Fast orange blinking for setup mode indication
   led.setPixelColor(0, led.Color(255, 165, 0));
   led.show();
 }
+
+// ============================================
+// Global Objects
+// ============================================
+
+WiFiManager wifiManager;
 
 // ============================================
 // Setup
@@ -523,6 +566,7 @@ void setup() {
       clearAuthToken(); 
       
       // 2. Wipe WiFi Credentials
+      // Note: We use the local wm here just for the wipe since the global isn't initialized yet
       WiFiManager wm;
       wm.resetSettings();
       delay(100);
@@ -565,7 +609,10 @@ void setup() {
   Serial.println("[1/4] Initializing TFT display...");
   if (initDisplay()) {
     Serial.println("      [OK] Display ready");
-    displayStatus("Booting...");
+    setUIMode("BOOTING");
+    setLastAction("Initializing...", false);
+    drawTopBar();
+    drawBottomPanel();
   } else {
     Serial.println("      [X] Display failed");
   }
@@ -574,10 +621,12 @@ void setup() {
 
   // Camera
   Serial.println("[2/4] Initializing camera...");
-  displayStatus("Camera init...");
+  setLastAction("Camera init...", false);
+  drawBottomPanel();
   if (!initCamera()) {
     Serial.println("      [X] Camera FAILED!");
-    displayError("Camera Error");
+    setLastAction("Camera Error", true);
+    drawBottomPanel();
     led.setPixelColor(0, led.Color(255, 0, 0));
     led.show();
   } else {
@@ -590,7 +639,8 @@ void setup() {
 
   // Cloud & Storage
   Serial.println("[3/4] Initializing cloud & SD storage...");
-  displayStatus("Storage init...");
+  setLastAction("Storage init...", false);
+  drawBottomPanel();
   initSDCard();
   initCloud();
 
@@ -598,70 +648,37 @@ void setup() {
 
   // WiFi
   Serial.println("[4/4] Connecting WiFi...");
-  displayStatus("WiFi connecting...");
+  setLastAction("WiFi connecting...", false);
+  setWiFiStatus(false);
+  drawTopBar();
+  drawBottomPanel();
   led.setPixelColor(0, led.Color(255, 165, 0));
   led.show();
 
-  // CRITICAL: Explicitly wake up the radio! If the pen was wiped previously,
-  // the radio was turned off and written to NVS persistence. It must be turned on.
-  WiFi.mode(WIFI_STA); 
+  // CRITICAL: Force the ESP32 radio into a clean state and explicitly
+  // enable AP+STA mode so it can broadcast the captive portal reliably.
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.disconnect(true, true);
   delay(100);
 
-  WiFiManager wifiManager;
+  // Set a specific static IP for the Captive Portal to prevent DHCP starvation
+  IPAddress apIP(192, 168, 4, 1);
+  wifiManager.setAPStaticIPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+  
+  // CRITICAL: Make the setup portal non-blocking so the user can still
+  // click the button to take offline pictures while the QR code is on screen!
+  wifiManager.setConfigPortalBlocking(false);
+  
   wifiManager.setAPCallback(configModeCallback);
   // Optional: timeout to prevent getting stuck in portal mode forever
   // wifiManager.setConfigPortalTimeout(180);
 
   // AutoConnect does the magic
   if (!wifiManager.autoConnect(AP_NAME)) {
-    Serial.println("Failed to connect and hit timeout");
-    displayError("WiFi Failed");
-    led.setPixelColor(0, led.Color(255, 0, 0));
-    led.show();
-    delay(3000);
-    ESP.restart(); // Reset and try again
+    Serial.println("Starting non-blocking WiFi Setup Portal...");
   }
 
-  Serial.println();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[OK] WiFi connected! IP: %s\n",
-                  WiFi.localIP().toString().c_str());
-    displayWiFiInfo(WiFi.localIP().toString().c_str(), WiFi.SSID().c_str());
-
-    // Prevent the S3 WiFi modem from entering aggressive sleep routing
-    // which drops incoming TCP HTTP requests randomly
-    WiFi.setSleep(false);
-
-    led.setPixelColor(0, led.Color(0, 0, 255));
-    led.show();
-    delay(2000);
-
-    // Check pairing
-    if (getAuthToken()) {
-      Serial.println("[OK] Already paired!");
-      isPaired = true;
-      livePreviewActive = true;
-      displayReady();
-      led.setPixelColor(0, led.Color(0, 255, 0));
-      led.show();
-    } else {
-      Serial.println("[!] Not paired - starting pairing...");
-      char *code = startPairing();
-      if (code) {
-        strncpy(pairingCode, code, sizeof(pairingCode) - 1);
-        Serial.printf("Pairing code: %s\n", pairingCode);
-        displayPairingCode(pairingCode);
-        led.setPixelColor(0, led.Color(255, 165, 0));
-        led.show();
-      }
-    }
-  } else {
-    Serial.println("[X] WiFi failed!");
-    displayError("WiFi Failed");
-    led.setPixelColor(0, led.Color(255, 0, 0));
-    led.show();
-  }
 
   // Web server
   server.on("/", handleRoot);
@@ -714,7 +731,10 @@ void updateButtonState() {
         (millis() - buttonPressStartTime > LONG_PRESS_TIME)) {
       livePreviewActive = false;
       Serial.println("[Button] LONG PRESS Detected: Force Sync SD to Cloud!");
-      displayStatus("Syncing...");
+      setUIMode("SYNCING");
+      setLastAction("Syncing SD...", false);
+      drawTopBar();
+      drawBottomPanel();
       syncPendingQueue();
       displayReady();
       livePreviewActive = true;
@@ -732,14 +752,20 @@ void evaluateButtonActions() {
     if (buttonPressCount == 1) {
       livePreviewActive = false;
       Serial.println("[Button] SINGLE PRESS Detected: Saving to SD Card!");
-      displayStatus("Saving to SD...");
+      setUIMode("SAVING");
+      setLastAction("Saving to SD...", false);
+      drawTopBar();
+      drawBottomPanel();
       handleSDCapture();
       displayReady();
       livePreviewActive = true;
     } else if (buttonPressCount >= 2) {
       livePreviewActive = false;
       Serial.println("[Button] DOUBLE PRESS Detected: Uploading to Cloud!");
-      displayStatus("Uploading...");
+      setUIMode("UPLOADING");
+      setLastAction("Uploading...", false);
+      drawTopBar();
+      drawBottomPanel();
       handleUpload(); // Capture and dispatch to Supabase
       displayReady();
       livePreviewActive = true;
@@ -750,23 +776,26 @@ void evaluateButtonActions() {
 
 void loop() {
   server.handleClient();
+  
+  // CRITICAL: Process the background non-blocking WiFi Setup portal.
+  // If we don't call this continuously, the portal buttons won't work!
+  wifiManager.process();
+
+  // Asynchronous WiFi Connection Handler
+  if (WiFi.status() == WL_CONNECTED) {
+    onWiFiConnected();
+  }
 
   // Continuously poll the button
   updateButtonState();
   evaluateButtonActions();
 
-  // Periodic debug display update (every 5 seconds)
-  static unsigned long lastDebugUpdate = 0;
-  if (millis() - lastDebugUpdate > 5000) {
-    if (!livePreviewActive) {
-      displayCameraDebug(totalItemsUploaded, lastCaptureStatus,
-                         lastCaptureTimestamp);
-    }
-    lastDebugUpdate = millis();
-  }
+  // Periodic redraw of Top Bar for clock/status updates if needed, though we don't have a clock.
+  // We can just omit drawing here unless state changes.
+  // Removed old displayCameraDebug.
 
-  // Periodic pairing check
-  if (!isPaired && (millis() - lastPairingCheck) > PAIRING_CHECK_INTERVAL) {
+  // Periodic pairing check (Only if WiFi is actually connected!)
+  if (WiFi.status() == WL_CONNECTED && !isPaired && (millis() - lastPairingCheck) > PAIRING_CHECK_INTERVAL) {
     lastPairingCheck = millis();
     // ... rest of pairing loop
     if (pairingCode[0] != '\0') {
@@ -784,9 +813,9 @@ void loop() {
     }
   }
 
-  // Periodic SD Sync Queue Check (every 10 seconds)
+  // Periodic SD Sync Queue Check (every 10 seconds, only if WiFi is connected)
   static unsigned long lastSyncCheck = 0;
-  if (millis() - lastSyncCheck > 10000) {
+  if (WiFi.status() == WL_CONNECTED && millis() - lastSyncCheck > 10000) {
     lastSyncCheck = millis();
     syncPendingQueue();
   }

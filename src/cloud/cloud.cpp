@@ -52,6 +52,9 @@ static bool httpRequest(const char *method, const char *endpoint,
 
   LOG_DEBUG("[HTTP] %s %s (size: %d)", method, url.c_str(), bodySize);
 
+  // CRITICAL: Disable TLS session caching. After a wipe/soft reboot, stale TLS 
+  // session keys will cause the SSL handshake to fail for the new pairing request.
+  http.setReuse(false);
   http.begin(url);
 
   // Increase timeout since Supabase edge functions can take >5s to cold start

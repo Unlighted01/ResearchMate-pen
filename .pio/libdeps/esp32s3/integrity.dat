@@ -1,6 +1,7 @@
-tzapu/WiFiManager @ ^2.0.17
 lovyan03/LovyanGFX @ ^1.1.9
+tzapu/WiFiManager @ ^2.0.17
+ricmoo/QRCode @ ^0.0.1
 adafruit/Adafruit NeoPixel @ ^1.12.0
+bodmer/TJpg_Decoder @ ^1.1.0
 bblanchon/ArduinoJson @ ^7.0.0
 espressif/esp32-camera @ ^2.0.4
-bodmer/TJpg_Decoder @ ^1.1.0

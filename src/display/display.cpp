@@ -9,6 +9,7 @@
 #include <LovyanGFX.hpp>
 #include <TJpg_Decoder.h>
 #include <WiFi.h>
+#include <qrcode.h>
 
 class LGFX : public lgfx::LGFX_Device
 {
@@ -105,6 +106,7 @@ bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) 
 #define RED 0xFB6D       // #ff6b6b - error red
 #define PURPLE 0x9A7B    // #9d4edd - upload purple
 #define WHITE 0xFFFF     // white text
+#define BLACK 0x0000     // black
 #define GRAY 0x7BEF      // gray text
 
 #define W 240
@@ -215,370 +217,188 @@ bool initDisplay() {
   return true;
 }
 
-void displayStatus(const char *status) {
-  if (!displayInitialized)
-    return;
+// ============================================
+// UI State & Global Variables
+// ============================================
+static bool wifiConnected = false;
+static bool devicePaired = false;
+static String currentUIMode = "BOOTING";
+static int offlineQueueCount = 0;
+static String lastActionText = "";
+static bool lastActionIsError = false;
 
-  clearScreen();
-  drawHeader();
-  drawStatusBar(status, CYAN);
-
-  // Spinner dots animation area
-  tft.setTextColor(GRAY);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Please wait...", W / 2, H / 2);
+// Helpers to push state updates without redrawing everything
+void setWiFiStatus(bool connected) { wifiConnected = connected; }
+void setPairingStatus(bool paired) { devicePaired = paired; }
+void setUIMode(const char *mode) { currentUIMode = mode; }
+void setQueueCount(int count) { offlineQueueCount = count; }
+void setLastAction(const char *action, bool isError) { 
+  lastActionText = action; 
+  lastActionIsError = isError; 
 }
 
-void displayWiFiInfo(const char *ip, const char *ssid) {
-  if (!displayInitialized)
-    return;
+// ============================================
+// 3-Zone UI Layout Renderers
+// ============================================
 
-  clearScreen();
-  drawHeader();
-  drawStatusBar("[OK] WiFi Connected", GREEN);
+void drawTopBar() {
+  if (!displayInitialized) return;
 
-  // Info panel
-  drawPanel(110, 100);
+  tft.fillRect(0, 0, W, 32, BG_PANEL);
 
-  tft.setTextColor(GRAY);
-  tft.setTextDatum(TL_DATUM);
-  tft.drawString("Network:", 25, 125);
-  tft.drawString("IP Address:", 25, 160);
-
-  tft.setTextColor(WHITE);
-  tft.setTextDatum(TR_DATUM);
-  tft.drawString(ssid, W - 25, 125);
-  tft.drawString(ip, W - 25, 160);
-}
-
-void displayWiFiSetup(const char *apName) {
-  if (!displayInitialized)
-    return;
-
-  clearScreen();
-  drawHeader();
-  drawStatusBar("[!] Setup Mode", ORANGE);
-
-  // Info panel
-  drawPanel(110, 130);
-
-  tft.setTextColor(GRAY);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Connect phone to WiFi:", W / 2, 135);
-
-  tft.setTextColor(ORANGE);
-  tft.setTextSize(2);
-  tft.drawString(apName, W / 2, 175);
+  // Left: WiFi Status
   tft.setTextSize(1);
+  tft.setTextDatum(ML_DATUM);
+  tft.setTextColor(wifiConnected ? GREEN : RED);
+  tft.drawString(wifiConnected ? "[WIFI ON]" : "[WIFI OFF]", 5, 16);
 
+  // Center: Current Mode
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(WHITE);
+  tft.drawString(currentUIMode, W / 2, 16);
+
+  // Right: Pairing Status
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextColor(devicePaired ? CYAN : GRAY);
+  tft.drawString(devicePaired ? "[PAIRED]" : "[UNPAIRED]", W - 5, 16);
+
+  // Bottom border line for Top Bar
+  tft.fillRect(0, 31, W, 1, CYAN);
+}
+
+void drawBottomPanel() {
+  if (!displayInitialized) return;
+
+  tft.fillRect(0, 272, W, 48, BG_PANEL);
+  
+  // Top border line for Bottom Panel
+  tft.fillRect(0, 272, W, 1, CYAN);
+
+  // Text: Last Action
+  tft.setTextSize(1);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(lastActionIsError ? RED : GREEN);
+  tft.drawString(lastActionText.length() > 0 ? lastActionText : "Ready", W / 2, 286);
+
+  // Text: Queue Count
+  char qBuf[32];
+  sprintf(qBuf, "Offline Queue: %d", offlineQueueCount);
+  tft.setTextColor(GRAY);
+  tft.drawString(qBuf, W / 2, 304);
+}
+
+// ============================================
+// Viewfinder Zone (Middle 240x240)
+// ============================================
+
+void displayWiFiSetupQR(const char *ssid) {
+  if (!displayInitialized) return;
+
+  // Clear viewfinder area entirely
+  tft.fillRect(0, 32, W, 240, BG_DARK);
+
+  setUIMode("SETUP AP");
+  drawTopBar();
+  drawBottomPanel();
+
+  // Build the standardized WiFi string
+  String wifiStr = String("WIFI:T:nopass;S:") + ssid + ";;";
+
+  // Generate QR Code data
+  QRCode qrcode;
+  uint8_t qrcodeData[qrcode_getBufferSize(3)];
+  qrcode_initText(&qrcode, qrcodeData, 3, 0, wifiStr.c_str());
+
+  // Calculate size and position to center it nicely in the viewfinder
+  int boxSize = 4; // 4x4 pixels per QR module
+  int qrWidth = qrcode.size * boxSize;
+  int startX = (W - qrWidth) / 2;
+  int startY = 32 + ((240 - qrWidth) / 2) - 10;
+
+  // Draw white background for contrast
+  tft.fillRect(startX - 10, startY - 10, qrWidth + 20, qrWidth + 20, WHITE);
+
+  // Draw the QR Code blocks
+  for (uint8_t y = 0; y < qrcode.size; y++) {
+    for (uint8_t x = 0; x < qrcode.size; x++) {
+      if (qrcode_getModule(&qrcode, x, y)) {
+        tft.fillRect(startX + (x * boxSize), startY + (y * boxSize), boxSize, boxSize, BLACK);
+      }
+    }
+  }
+
+  // Draw text hint below the QR code inside the viewfinder
   tft.setTextColor(CYAN);
-  tft.drawString("to configure internet", W / 2, 220);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("Scan to connect!", W / 2, startY + qrWidth + 25);
 }
 
 void displayPairingCode(const char *code) {
-  if (!displayInitialized)
-    return;
+  if (!displayInitialized) return;
 
-  clearScreen();
-  drawHeader();
-  drawStatusBar("[!] Pairing Mode", GOLD);
+  // Clear viewfinder area entirely
+  tft.fillRect(0, 32, W, 240, BG_DARK);
 
-  // Code panel
-  drawPanel(110, 130);
+  setUIMode("PAIRING");
+  drawTopBar();
+  drawBottomPanel();
 
   tft.setTextColor(GRAY);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Enter code on website:", W / 2, 135);
+  tft.drawString("Enter code on website:", W / 2, 90);
 
   // Big pairing code
   tft.setTextColor(GOLD);
-  tft.setTextSize(2);
-  tft.drawString(code, W / 2, 175);
+  tft.setTextSize(3);
+  tft.drawString(code, W / 2, 130);
   tft.setTextSize(1);
 
   tft.setTextColor(GRAY);
-  tft.drawString("researchmate.app", W / 2, 220);
+  tft.drawString("researchmate.app", W / 2, 170);
 
   // Waiting animation hint
   tft.setTextColor(CYAN);
-  tft.drawString("Waiting for confirmation...", W / 2, H - 40);
+  tft.drawString("Waiting for confirmation...", W / 2, 230);
 }
 
-void displaySuccess() {
-  if (!displayInitialized)
-    return;
-
-  clearScreen();
-  drawHeader();
-  drawStatusBar("[OK] Paired & Ready", GREEN);
-
-  // Ready panel
-  drawPanel(110, 120);
-
-  tft.setTextColor(GREEN);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextSize(2);
-  tft.drawString("READY", W / 2, 140);
-  tft.setTextSize(1);
-
-  tft.setTextColor(WHITE);
-  tft.drawString("Press button to scan", W / 2, 175);
-
-  // Show WebServer IP Address on the screen!
-  tft.setTextColor(CYAN);
-  if (WiFi.status() == WL_CONNECTED) {
-    tft.drawString("Web UI IP Address:", W / 2, 205);
-    tft.setTextColor(WHITE);
-    tft.drawString(WiFi.localIP().toString(), W / 2, 220);
-  } else {
-    tft.drawString("WiFi Disconnected", W / 2, 215);
-  }
-
-  // Hint
-  tft.setTextColor(GRAY);
-  tft.drawString("Auto-sync enabled", W / 2, H - 40);
-}
-
-void displayError(const char *error) {
-  if (!displayInitialized)
-    return;
-
-  clearScreen();
-  drawHeader();
-  drawStatusBar("[X] Error", RED);
-
-  // Error panel
-  drawPanel(110, 80);
-
-  tft.setTextColor(RED);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString(error, W / 2, 150);
-
-  tft.setTextColor(GRAY);
-  tft.drawString("Please try again", W / 2, H - 40);
-}
-
-void displayScanning() {
-  if (!displayInitialized)
-    return;
-
-  clearScreen();
-  drawHeader();
-  drawStatusBar("Scanning...", CYAN);
-
-  // Camera icon placeholder
-  drawPanel(110, 120);
-
-  tft.setTextColor(CYAN);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextSize(2);
-  tft.drawString("[ ]", W / 2, 160);
-  tft.setTextSize(1);
-
-  tft.setTextColor(WHITE);
-  tft.drawString("Capturing image...", W / 2, 210);
-}
-
-void displayUploading(int progress) {
-  if (!displayInitialized)
-    return;
-
-  clearScreen();
-  drawHeader();
-  drawStatusBar("Uploading to Cloud", PURPLE);
-
-  // Progress panel
-  drawPanel(110, 100);
-
-  tft.setTextColor(WHITE);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Syncing with ResearchMate...", W / 2, 135);
-
-  drawProgressBar(165, progress, PURPLE);
-}
-
-void displayUploadComplete() {
-  if (!displayInitialized)
-    return;
-
-  clearScreen();
-  drawHeader();
-  drawStatusBar("[OK] Upload Complete!", GREEN);
-
-  // Success panel
-  drawPanel(110, 100);
-
-  tft.setTextColor(GREEN);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextSize(2);
-  tft.drawString("DONE", W / 2, 160);
-  tft.setTextSize(1);
-
-  tft.setTextColor(GRAY);
-  tft.drawString("Saved to cloud", W / 2, H - 40);
-}
-
-void displayColorDemo(uint16_t color, const char *colorName) {
-  if (!displayInitialized)
-    return;
-
-  tft.fillScreen(color);
-  tft.setTextColor(color == WHITE ? 0x0000 : WHITE);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextSize(2);
-  tft.drawString(colorName, W / 2, H / 2);
-  tft.setTextSize(1);
-}
-
-void displaySDCardStatus(bool available, const char *info) {
-  if (!displayInitialized)
-    return;
-
-  clearScreen();
-  drawHeader();
-
-  if (available) {
-    drawStatusBar("[OK] SD Card Ready", GREEN);
-
-    drawPanel(110, 100);
-    tft.setTextColor(WHITE);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString("Storage Available", W / 2, 135);
-
-    tft.setTextColor(CYAN);
-    tft.drawString(info, W / 2, 170);
-  } else {
-    drawStatusBar("[!] No SD Card", GOLD);
-
-    drawPanel(110, 80);
-    tft.setTextColor(GRAY);
-    tft.setTextDatum(MC_DATUM);
-    tft.drawString("Insert SD card for", W / 2, 135);
-    tft.drawString("offline backup", W / 2, 155);
-  }
-}
-
-void clearDisplay() { clearScreen(); }
-
-void displayCameraStatus(bool working) {
-  if (!displayInitialized)
-    return;
-  Serial.printf("[Display] Camera: %s\n", working ? "OK" : "ERROR");
-}
-
-void displayTestPattern() {
-  if (!displayInitialized)
-    return;
-  clearScreen();
-  drawHeader();
-  tft.setTextColor(WHITE);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Test Pattern", W / 2, H / 2);
-}
-
-// ============================================
-// Camera Debug Display
-// ============================================
-
-void displayCameraDebug(int itemCount, const char *lastStatus,
-                        unsigned long lastCaptureTime) {
-  if (!displayInitialized)
-    return;
-
-  // Clear bottom section for debug panel
-  tft.fillRect(0, H - 80, W, 80, BG_DARK);
-
-  // Draw rounded panel background
-  tft.fillRoundRect(10, H - 75, W - 20, 70, 5, BG_PANEL);
-
-  // Title
-  tft.setTextColor(GRAY);
-  tft.setTextSize(1);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("CAMERA DEBUG", W / 2, H - 68);
-
-  // Item count (large, cyan)
-  tft.setTextColor(CYAN);
-  tft.setTextSize(2);
-  char countStr[32];
-  sprintf(countStr, "%d ITEMS", itemCount);
-  tft.drawString(countStr, W / 2, H - 50);
-
-  // Last status with color based on result
-  tft.setTextSize(1);
-  uint16_t statusColor = GRAY;
-  if (strstr(lastStatus, "OK") || strstr(lastStatus, "Success")) {
-    statusColor = GREEN;
-  } else if (strstr(lastStatus, "Error") || strstr(lastStatus, "Failed")) {
-    statusColor = RED;
-  } else if (strstr(lastStatus, "Upload")) {
-    statusColor = ORANGE;
-  }
-  tft.setTextColor(statusColor);
-  tft.drawString(lastStatus, W / 2, H - 30);
-
-  // Time since last capture
-  if (lastCaptureTime > 0) {
-    unsigned long elapsed = (millis() - lastCaptureTime) / 1000;
-    char timeStr[32];
-    if (elapsed < 60) {
-      sprintf(timeStr, "%lu sec ago", elapsed);
-    } else {
-      sprintf(timeStr, "%lu min ago", elapsed / 60);
-    }
-    tft.setTextColor(GRAY);
-    tft.drawString(timeStr, W / 2, H - 15);
-  } else {
-    tft.setTextColor(GRAY);
-    tft.drawString("No captures yet", W / 2, H - 15);
-  }
+void displayReady() {
+  if (!displayInitialized) return;
+  setUIMode("READY");
+  setLastAction("Camera Active", false);
+  drawTopBar();
+  drawBottomPanel();
 }
 
 void displayCaptureFlash() {
-  if (!displayInitialized)
-    return;
+  if (!displayInitialized) return;
 
-  // Quick cyan flash for visual feedback
-  tft.fillScreen(CYAN);
+  // Flash ONLY the viewfinder zone
+  tft.fillRect(0, 32, W, 240, CYAN);
   delay(80);
 
   // Show "CAPTURING..." text briefly
   tft.setTextColor(BG_DARK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("CAPTURING...", W / 2, H / 2);
+  tft.drawString("CAPTURING...", W / 2, 32 + 120);
   delay(120);
-
-  // Screen will be redrawn by next display update
 }
 
 void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len) {
-  if (!displayInitialized || !jpg_data)
-    return;
+  if (!displayInitialized || !jpg_data) return;
 
-  // Let's draw it from -80, 10 to properly center the 400x300 downscaled UXGA
-  // image on the 240x320 screen (400 - 240 = 160 -> -80 width clamp)
-  TJpgDec.drawJpg(-80, 10, jpg_data, jpg_len);
+  // Protect the top and bottom panels from being overwritten by the Jpeg decoder
+  tft.setClipRect(0, 32, W, 240);
 
+  // Center the 400x300 downscaled image in the 240x240 viewfinder
+  // X offset: (240 - 400) / 2 = -80
+  // Y offset: 32 (top of viewfinder) - ((300 - 240) / 2) = 32 - 30 = 2
+  TJpgDec.drawJpg(-80, 2, jpg_data, jpg_len);
+
+  tft.clearClipRect();
+  
   // CRITICAL FIX: Rapidly rendering JPEGs causes TFT_eSPI to hold the SPI bus
   // Host clamping the CS hardware pin. We MUST forcibly end the transaction
   // here so the SD card can use the SPI module safely later.
   tft.endWrite();
-}
-
-void displayReady() {
-  if (!displayInitialized)
-    return;
-
-  // We don't want to clearScreen() here because `livePreviewActive` will
-  // immediately draw over it anyway, and `clearScreen()` takes time over SPI
-  // and causes black flickering / tearing. Let the live camera JPEG naturally
-  // draw over the screen
-  drawHeader();
-
-  // Bottom text hint (over a small background so it's readable)
-  tft.fillRect(0, H - 30, W, 30, BG_DARK);
-  tft.setTextColor(GRAY);
-  tft.setTextDatum(MC_DATUM);
-  tft.drawString("Press to Take Photo", W / 2, H - 15);
 }
