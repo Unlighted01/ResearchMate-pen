@@ -1,162 +1,110 @@
 # ResearchMate Smart Pen - Hardware Pinout Reference
 
+> ⚠️ **VERIFIED WORKING BUILD** — Last confirmed: 2026-03-05
+> Do NOT change any pin assignments without physically re-wiring the hardware first.
+
 ## ESP32-S3-WROOM-N16R8-CAM Pin Assignments
 
-### 📷 Camera Interface (OV5640) - Built-in DVP Parallel
+### � TFT Display - SPI Interface (ILI9341, LovyanGFX)
 
-| Function                  | GPIO    | Notes                |
-| ------------------------- | ------- | -------------------- |
-| **XCLK** (Master Clock)   | GPIO 15 | 20MHz camera clock   |
-| **SIOD** (I2C SDA)        | GPIO 4  | Camera control data  |
-| **SIOC** (I2C SCL)        | GPIO 5  | Camera control clock |
-| **Y9** (Data bit 7)       | GPIO 16 | MSB parallel data    |
-| **Y8** (Data bit 6)       | GPIO 17 |                      |
-| **Y7** (Data bit 5)       | GPIO 18 |                      |
-| **Y6** (Data bit 4)       | GPIO 12 |                      |
-| **Y5** (Data bit 3)       | GPIO 10 |                      |
-| **Y4** (Data bit 2)       | GPIO 8  |                      |
-| **Y3** (Data bit 1)       | GPIO 9  |                      |
-| **Y2** (Data bit 0)       | GPIO 11 | LSB parallel data    |
-| **VSYNC** (Vertical Sync) | GPIO 6  | Frame sync signal    |
-| **HREF** (Horizontal Ref) | GPIO 7  | Line reference       |
-| **PCLK** (Pixel Clock)    | GPIO 13 | Pixel clock signal   |
+| Function              | GPIO        | Notes                   |
+| --------------------- | ----------- | ----------------------- |
+| **MOSI** (Master Out) | **GPIO 35** | SPI Data to display     |
+| **CLK** (SPI Clock)   | **GPIO 37** | SPI Clock               |
+| **MISO** (Master In)  | **GPIO 36** | SPI Data from display   |
+| **CS** (Chip Select)  | **GPIO 38** | Active LOW              |
+| **DC** (Data/Command) | **GPIO 14** | HIGH=Data, LOW=Command  |
+| **RST** (Reset)       | **GPIO 21** | Active LOW hardware RST |
+| **BL** (Backlight)    | **GPIO 47** | PWM backlight control   |
 
-> **DO NOT USE** these GPIOs for other peripherals - they are hardwired to the camera module!
+**Driver:** LovyanGFX v1.2.19, `Panel_ILI9341`, `SPI2_HOST` (FSPI), 27MHz write clock  
+**Panel Config:** 240×320, no offset, `invert=false`, `rgb_order=false`, `bus_shared=true`  
+**Backlight:** `Light_PWM`, `pwm_channel=7`, `freq=44100`, `invert=false`
 
 ---
 
-### 🖥️ TFT Display - SPI Interface (Conflict-Free)
+### 📷 Camera Interface (OV2640) - Built-in DVP Parallel
 
-| Function              | GPIO        | Original (Conflicted) | Status         |
-| --------------------- | ----------- | --------------------- | -------------- |
-| **MOSI** (Master Out) | **GPIO 35** | ~~GPIO 11~~           | ✅ Fixed       |
-| **CLK** (SPI Clock)   | **GPIO 36** | ~~GPIO 13~~           | ✅ Fixed       |
-| **MISO** (Master In)  | **GPIO 37** | ~~GPIO 12~~           | ✅ Fixed       |
-| **CS** (Chip Select)  | **GPIO 38** | ~~GPIO 10~~           | ✅ Fixed       |
-| **DC** (Data/Command) | **GPIO 14** | GPIO 14               | ✅ No conflict |
-| **RST** (Reset)       | **GPIO 21** | ~~GPIO 9~~            | ✅ Fixed       |
-| **BL** (Backlight)    | **GPIO 20** | ~~GPIO 8~~            | ✅ Fixed       |
+| Function                  | GPIO    |
+| ------------------------- | ------- |
+| **XCLK** (Master Clock)   | GPIO 15 |
+| **SIOD** (I2C SDA)        | GPIO 4  |
+| **SIOC** (I2C SCL)        | GPIO 5  |
+| **Y9** (Data bit 7)       | GPIO 16 |
+| **Y8** (Data bit 6)       | GPIO 17 |
+| **Y7** (Data bit 5)       | GPIO 18 |
+| **Y6** (Data bit 4)       | GPIO 12 |
+| **Y5** (Data bit 3)       | GPIO 10 |
+| **Y4** (Data bit 2)       | GPIO 8  |
+| **Y3** (Data bit 1)       | GPIO 9  |
+| **Y2** (Data bit 0)       | GPIO 11 |
+| **VSYNC** (Vertical Sync) | GPIO 6  |
+| **HREF** (Horizontal Ref) | GPIO 7  |
+| **PCLK** (Pixel Clock)    | GPIO 13 |
 
-**Update your `config.h` with:**
+> These are hardwired on the camera module — do NOT reassign.
 
-```cpp
-// TFT Display - Conflict-free pin assignment
-#define TFT_MOSI 35
-#define TFT_CLK  36
-#define TFT_MISO 37
-#define TFT_CS   38
-#define TFT_DC   14  // No change
-#define TFT_RST  21
-#define TFT_BL   20
-```
+---
+
+### � SD Card Reader - SPI Interface
+
+| Function | GPIO        |
+| -------- | ----------- |
+| **CS**   | **GPIO 42** |
+| **MOSI** | **GPIO 41** |
+| **MISO** | **GPIO 40** |
+| **SCK**  | **GPIO 39** |
 
 ---
 
 ### 💡 Status LED & Buttons
 
-| Function           | GPIO    | Type            | Notes            |
-| ------------------ | ------- | --------------- | ---------------- |
-| **RGB LED**        | GPIO 48 | WS2812B         | Status indicator |
-| **Capture Button** | GPIO 0  | Input + Pull-up | Active LOW       |
-
-**Additional Button Suggestions:**
-
-- **Menu/Mode Button**: GPIO 1 or GPIO 2
-- **Power Button**: Use EN pin with RC circuit for hardware power control
+| Function               | GPIO        | Type            | Notes                        |
+| ---------------------- | ----------- | --------------- | ---------------------------- |
+| **RGB LED**            | GPIO 48     | WS2812B         | NeoPixel status indicator    |
+| **Capture Button**     | GPIO 2      | Input + Pull-up | Active LOW, wired to GND     |
+| **Power/Reset Button** | GPIO 1      | Input + Pull-up | Active LOW, wired to GND     |
 
 ---
 
-### 🔋 Power Pins
+### ⚠️ Reserved / Dangerous Pins
 
-| Pin     | Voltage | Function                                               |
-| ------- | ------- | ------------------------------------------------------ |
-| **5V**  | 5.0V    | USB-C input / TP4056 output                            |
-| **3V3** | 3.3V    | Internal LDO regulator output                          |
-| **GND** | 0V      | Common ground                                          |
-| **BAT** | 3.7V    | Direct battery connection (if using built-in charging) |
-
----
-
-### ⚠️ Reserved / Strapping Pins (Use with Caution)
-
-| GPIO            | Function      | Recommendation                  |
-| --------------- | ------------- | ------------------------------- |
-| **GPIO 0**      | Boot mode     | ✅ Used for button (acceptable) |
-| **GPIO 3**      | JTAG          | ⚠️ Avoid unless debugging       |
-| **GPIO 45**     | Strapping pin | ⚠️ Use pull-up/down only        |
-| **GPIO 46**     | Strapping pin | ⚠️ Use pull-up/down only        |
-| **GPIO 19, 20** | USB D+/D-     | ⚠️ OK if not using native USB   |
-
----
-
-### ✅ Available GPIO Pins for Future Expansion
-
-These pins are free and safe to use:
-
-| GPIO Range | Quantity | Notes                             |
-| ---------- | -------- | --------------------------------- |
-| GPIO 1-3   | 3 pins   | Safe if using USB CDC (not UART)  |
-| GPIO 19-21 | 3 pins   | ✅ Currently using 20, 21 for TFT |
-| GPIO 33-42 | 10 pins  | ✅ Best for general purpose I/O   |
-| GPIO 43-44 | 2 pins   | UART TX/RX, safe if using USB CDC |
-| GPIO 47    | 1 pin    | Safe general purpose              |
-
-**Usage Ideas:**
-
-- SD card reader (SPI or SDIO)
-- Additional buttons/switches
-- External sensors (I2C/SPI)
-- Buzzer/speaker (PWM)
-- Battery voltage monitoring (ADC)
+| GPIO       | Why                                    | Rule                        |
+| ---------- | -------------------------------------- | --------------------------- |
+| **GPIO 0** | Boot mode strapping                    | OK for button (acceptable)  |
+| **GPIO 3** | **JTAG/USB strapping pin**             | **NEVER USE FOR BUTTONS**   |
+| **GPIO 45** | VDD_SPI voltage strapping             | Avoid                       |
+| **GPIO 46** | Boot ROM log strapping                | Avoid                       |
+| **GPIO 19, 20** | USB D+/D- (used by native USB CDC) | Do not touch                |
 
 ---
 
 ## 🔌 Wiring Diagram
 
 ```
-ESP32-S3-CAM                     1.47" TFT Display
+ESP32-S3-CAM                     ILI9341 TFT Display
 ┌──────────────┐                ┌──────────────┐
-│              │                │              │
 │   GPIO 35 ───┼────────────────┼─→ MOSI (SDA) │
-│   GPIO 36 ───┼────────────────┼─→ SCK (CLK)  │
-│   GPIO 37 ───┼────────────────┼─→ MISO       │
+│   GPIO 37 ───┼────────────────┼─→ SCK (CLK)  │
+│   GPIO 36 ───┼────────────────┼─→ MISO       │
 │   GPIO 38 ───┼────────────────┼─→ CS         │
 │   GPIO 14 ───┼────────────────┼─→ DC         │
 │   GPIO 21 ───┼────────────────┼─→ RST        │
-│   GPIO 20 ───┼────────────────┼─→ BL         │
-│              │                │              │
+│   GPIO 47 ───┼────────────────┼─→ BL         │
 │   3.3V ──────┼────────────────┼─→ VCC        │
 │   GND ───────┼────────────────┼─→ GND        │
-│              │                │              │
 └──────────────┘                └──────────────┘
 
-ESP32-S3-CAM                     WS2812B LED
-│   GPIO 48 ───┼────────────────┼─→ DIN        │
+ESP32-S3-CAM                     SD Card Reader
+│   GPIO 42 ───┼────────────────┼─→ CS         │
+│   GPIO 41 ───┼────────────────┼─→ MOSI       │
+│   GPIO 40 ───┼────────────────┼─→ MISO       │
+│   GPIO 39 ───┼────────────────┼─→ SCK        │
 │   3.3V ──────┼────────────────┼─→ VCC        │
 │   GND ───────┼────────────────┼─→ GND        │
 
-ESP32-S3-CAM                     Button
-│   GPIO 0 ────┼────┐            │
-│              │    └─[Button]─GND
-│              │    (Internal pull-up enabled)
+ESP32-S3-CAM                     Components
+│   GPIO 48 ───┼─→ WS2812B DIN
+│   GPIO 2  ───┼─→ Capture Button ─→ GND
+│   GPIO 1  ───┼─→ Power Button ──→ GND
 ```
-
----
-
-## 📝 Configuration Update Checklist
-
-- [ ] Update `src/config.h` with new TFT pin definitions
-- [ ] Verify TFT library SPI pin configuration (TFT_eSPI or Adafruit GFX)
-- [ ] Test display initialization with new pins
-- [ ] Confirm camera still works after pin changes
-- [ ] Update hardware documentation/schematics
-
----
-
-## 🎓 For Thesis Documentation
-
-Include this pinout table in your:
-
-- **Hardware Design section** - Complete pin mapping
-- **Assembly Instructions** - Wiring diagram reference
-- **Troubleshooting Guide** - Pin conflict resolution example

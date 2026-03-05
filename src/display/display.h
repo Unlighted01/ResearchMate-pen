@@ -13,6 +13,8 @@ bool initDisplay();
 
 // Clear the entire display
 void clearDisplay();
+void clearScreen();
+void drawHeader();
 
 // Set the global Wi-Fi status for the Top Bar
 void setWiFiStatus(bool connected);
@@ -34,6 +36,15 @@ void drawTopBar();
 
 // Draw the Bottom Action Panel
 void drawBottomPanel();
+
+// ============================================
+// Factory Reset Wipe UI
+// ============================================
+void displayWipeStart();
+void displayWipeProgress(int pct);
+void displayWipeCancelled();
+void displayWipeComplete();
+void displaySleep();
 
 // Show WiFi Setup QR Code centered in the viewfinder zone
 void displayWiFiSetupQR(const char *ssid);

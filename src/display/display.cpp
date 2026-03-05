@@ -53,7 +53,7 @@ public:
       cfg.readable         = true;
       cfg.invert           = false; // Standard for ILI9341
       cfg.rgb_order        = false; 
-      cfg.dlen_16bit       = false; 
+      cfg.dlen_16bit       = false;
       cfg.bus_shared       = true;
 
       _panel_instance.config(cfg);
@@ -109,8 +109,10 @@ bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) 
 #define BLACK 0x0000     // black
 #define GRAY 0x7BEF      // gray text
 
-#define W 240
-#define H 320
+#define SCREEN_W tft.width()
+#define SCREEN_H tft.height()
+#define W SCREEN_W
+#define H SCREEN_H
 
 #include "display.h"
 
@@ -126,18 +128,18 @@ void drawPanel(int y, int h) {
 
 void drawHeader() {
   // Logo bar
-  tft.fillRect(0, 0, W, 50, BG_PANEL);
+  tft.fillRect(0, 0, SCREEN_W, 50, BG_PANEL);
   tft.setTextDatum(MC_DATUM);
   tft.setTextSize(1);
 
   // Title
   tft.setTextColor(CYAN);
-  tft.drawString("ResearchMate", W / 2, 18);
+  tft.drawString("ResearchMate", SCREEN_W / 2, 18);
   tft.setTextColor(GRAY);
-  tft.drawString("Smart Pen", W / 2, 36);
+  tft.drawString("Smart Pen", SCREEN_W / 2, 36);
 
   // Bottom accent line
-  tft.fillRect(60, 48, W - 120, 2, CYAN);
+  tft.fillRect(60, 48, SCREEN_W - 120, 2, CYAN);
 }
 
 void drawStatusBar(const char *text, uint16_t color) {
@@ -189,6 +191,7 @@ bool initDisplay() {
 
   tft.init();
   tft.setRotation(0); // Normal orientation
+  tft.setBrightness(255);
   tft.fillScreen(BG_DARK);
   tft.setTextWrap(false);
 
@@ -204,11 +207,11 @@ bool initDisplay() {
   // Version info
   tft.setTextColor(GRAY);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("v1.0", W / 2, H / 2);
+  tft.drawString("v1.0", SCREEN_W / 2, SCREEN_H / 2);
 
   // Loading bar animation
   for (int i = 0; i <= 100; i += 10) {
-    drawProgressBar(H / 2 + 40, i, CYAN);
+    drawProgressBar(SCREEN_H / 2 + 40, i, CYAN);
     delay(50);
   }
 
@@ -310,10 +313,10 @@ void displayWiFiSetupQR(const char *ssid) {
   qrcode_initText(&qrcode, qrcodeData, 3, 0, wifiStr.c_str());
 
   // Calculate size and position to center it nicely in the viewfinder
-  int boxSize = 4; // 4x4 pixels per QR module
+  int boxSize = 2; // Reduced for smaller screens
   int qrWidth = qrcode.size * boxSize;
-  int startX = (W - qrWidth) / 2;
-  int startY = 32 + ((240 - qrWidth) / 2) - 10;
+  int startX = (SCREEN_W - qrWidth) / 2;
+  int startY = 20 + ((SCREEN_H - 40 - qrWidth) / 2);
 
   // Draw white background for contrast
   tft.fillRect(startX - 10, startY - 10, qrWidth + 20, qrWidth + 20, WHITE);
@@ -327,17 +330,17 @@ void displayWiFiSetupQR(const char *ssid) {
     }
   }
 
-  // Draw text hint below the QR code inside the viewfinder
+  // Draw text hint below the QR code
   tft.setTextColor(CYAN);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Scan to connect!", W / 2, startY + qrWidth + 25);
+  tft.drawString("Scan QR Setup", SCREEN_W / 2, startY + qrWidth + 15);
 }
 
 void displayPairingCode(const char *code) {
   if (!displayInitialized) return;
 
   // Clear viewfinder area entirely
-  tft.fillRect(0, 32, W, 240, BG_DARK);
+  tft.fillRect(0, 20, SCREEN_W, SCREEN_H - 40, BG_DARK);
 
   setUIMode("PAIRING");
   drawTopBar();
@@ -345,20 +348,17 @@ void displayPairingCode(const char *code) {
 
   tft.setTextColor(GRAY);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Enter code on website:", W / 2, 90);
+  tft.drawString("Enter code on site:", SCREEN_W / 2, 50);
 
   // Big pairing code
   tft.setTextColor(GOLD);
   tft.setTextSize(3);
-  tft.drawString(code, W / 2, 130);
+  tft.drawString(code, SCREEN_W / 2, 90);
   tft.setTextSize(1);
-
-  tft.setTextColor(GRAY);
-  tft.drawString("researchmate.app", W / 2, 170);
 
   // Waiting animation hint
   tft.setTextColor(CYAN);
-  tft.drawString("Waiting for confirmation...", W / 2, 230);
+  tft.drawString("Waiting for link...", SCREEN_W / 2, 140);
 }
 
 void displayReady() {
@@ -373,27 +373,31 @@ void displayCaptureFlash() {
   if (!displayInitialized) return;
 
   // Flash ONLY the viewfinder zone
-  tft.fillRect(0, 32, W, 240, CYAN);
-  delay(80);
+  tft.fillRect(0, 20, SCREEN_W, SCREEN_H - 40, CYAN);
+  delay(50);
 
   // Show "CAPTURING..." text briefly
   tft.setTextColor(BG_DARK);
   tft.setTextSize(2);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("CAPTURING...", W / 2, 32 + 120);
-  delay(120);
+  tft.drawString("CAPTURING...", SCREEN_W / 2, SCREEN_H / 2);
+  delay(50);
 }
 
 void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len) {
   if (!displayInitialized || !jpg_data) return;
 
-  // Protect the top and bottom panels from being overwritten by the Jpeg decoder
-  tft.setClipRect(0, 32, W, 240);
+  int viewHeight = SCREEN_H - 40;
+  
+  // Protect the top and bottom panels
+  tft.setClipRect(0, 20, SCREEN_W, viewHeight);
 
-  // Center the 400x300 downscaled image in the 240x240 viewfinder
-  // X offset: (240 - 400) / 2 = -80
-  // Y offset: 32 (top of viewfinder) - ((300 - 240) / 2) = 32 - 30 = 2
-  TJpgDec.drawJpg(-80, 2, jpg_data, jpg_len);
+  // With a 320x172 screen and 400x300 downscaled image:
+  // Dynamically center it.
+  int xOffset = (SCREEN_W - 400) / 2;
+  int yOffset = 20 + (viewHeight - 300) / 2;
+  
+  TJpgDec.drawJpg(xOffset, yOffset, jpg_data, jpg_len);
 
   tft.clearClipRect();
   
@@ -402,3 +406,48 @@ void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len) {
   // here so the SD card can use the SPI module safely later.
   tft.endWrite();
 }
+
+// ============================================
+// Factory Reset Wipe UI
+// ============================================
+
+void displayWipeStart() {
+  if (!displayInitialized) return;
+  tft.setTextColor(RED);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextSize(2);
+  tft.drawString("FACTORY RESET", SCREEN_W / 2, SCREEN_H / 2 - 20);
+  
+  tft.setTextColor(GOLD);
+  tft.setTextSize(1);
+  tft.drawString("Hold Power to confirm...", SCREEN_W / 2, SCREEN_H / 2 + 10);
+}
+
+void displayWipeProgress(int pct) {
+  if (!displayInitialized) return;
+  drawProgressBar(SCREEN_H / 2 + 30, pct, RED);
+}
+
+void displayWipeCancelled() {
+  if (!displayInitialized) return;
+  tft.setTextColor(GREEN);
+  tft.fillRect(0, SCREEN_H / 2 + 5, SCREEN_W, 30, BG_DARK); // Clear "Hold" text
+  tft.drawString("Reset Cancelled", SCREEN_W / 2, SCREEN_H / 2 + 10);
+}
+
+void displayWipeComplete() {
+  if (!displayInitialized) return;
+  tft.fillRect(0, SCREEN_H / 2 - 30, SCREEN_W, 100, BG_DARK);
+  tft.setTextSize(2);
+  tft.setTextColor(GREEN);
+  tft.drawString("WIPED!", SCREEN_W / 2, SCREEN_H / 2);
+}
+
+void displaySleep() {
+  if (!displayInitialized) return;
+  tft.fillScreen(BLACK);
+  tft.waitDisplay();
+  tft.setBrightness(0);
+  tft.sleep();
+}
+

@@ -231,22 +231,8 @@ void handleSDCapture() {
   setLastAction("Scanning...", false);
   drawBottomPanel();
 
-  // Give the SPI bus a moment to completely reset and allow the camera DMA to
-  // flush
-  delay(100);
-
-  // The live preview sometimes leaves a frame stuck in the buffer right as the
-  // button is pressed. Flush it once to guarantee a fresh, stable frame for the
-  // SD card.
+  // Grab the frame for SD card saving
   camera_fb_t *fb = captureFrame();
-  if (fb)
-    returnFrame(fb);
-
-  // Wait for the sensor line to restabilize
-  delay(50);
-
-  // Now grab the actual frame safely without dropping reference
-  fb = captureFrame();
   if (!fb) {
     Serial.println("[ERROR] SD Capture Failed: No frame available.");
     setLastAction("Capture Error", true);
@@ -534,16 +520,27 @@ void setup() {
   Serial.println("=== TFT Display + Camera ===");
   Serial.println("=================================\n");
 
-  // Capture button
+  // Set up both buttons
   pinMode(CAPTURE_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
+
+  // Initialize TFT really early so we can show wipe progress on screen
+  // (Note: Do not add delays before this, the display chip power-on timing requests immediate init)
+  Serial.println("[Display] Initializing earliest TFT...");
+  initDisplay();
 
   // === FACTORY RESET ON BOOT ===
-  // If the user holds the capture button while plugging in the device, we wipe everything
-  if (digitalRead(CAPTURE_BUTTON_PIN) == LOW) {
+  // If the user holds the POWER button while plugging in the device, we wipe everything
+  if (digitalRead(POWER_BUTTON_PIN) == LOW) {
     Serial.println("\n[!] FACTORY RESET DETECTED [!]");
     Serial.println("Hold button for 5 seconds to wipe device...");
     
-    // Light LED Red to indicate wipe mode is armed
+    // Show Wipe UI
+    clearScreen();
+    drawHeader();
+    displayWipeStart();
+
+    // Light LED Red
     led.begin();
     led.setBrightness(100);
     led.setPixelColor(0, led.Color(255, 0, 0));
@@ -551,11 +548,17 @@ void setup() {
 
     bool wipeConfirmed = true;
     for (int i = 0; i < 50; i++) { // 100ms * 50 = 5 seconds
-      if (digitalRead(CAPTURE_BUTTON_PIN) == HIGH) {
+      if (digitalRead(POWER_BUTTON_PIN) == HIGH) {
         wipeConfirmed = false;
         Serial.println("Reset cancelled.");
+        
+        displayWipeCancelled();
+        delay(1000);
         break; // They let go, abort!
       }
+      
+      // Update progress bar
+      displayWipeProgress(i * 2);
       delay(100);
     }
 
@@ -580,6 +583,8 @@ void setup() {
       Serial.println("[!] Device Wiped Successfully.");
       
       // Flash Green rapidly 3 times to confirm
+      displayWipeComplete();
+
       for (int i = 0; i < 3; i++) {
         led.setPixelColor(0, led.Color(0, 255, 0));
         led.show();
@@ -590,12 +595,13 @@ void setup() {
       }
       
       Serial.println("\nRebooting now...");
+      
+      // Clear TFT completely to black before hardware restart to avoid white flash
+      displaySleep();
+      
       ESP.restart(); // Reboot into out-of-box state
     }
   }
-
-  // Dedicated Power Button (GPIO 2)
-  // pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
 
   Serial.println("Buttons initialized");
 
@@ -605,17 +611,35 @@ void setup() {
   led.setPixelColor(0, led.Color(0, 255, 255));
   led.show();
 
-  // TFT Display
-  Serial.println("[1/4] Initializing TFT display...");
-  if (initDisplay()) {
-    Serial.println("      [OK] Display ready");
-    setUIMode("BOOTING");
-    setLastAction("Initializing...", false);
-    drawTopBar();
-    drawBottomPanel();
-  } else {
-    Serial.println("      [X] Display failed");
+  Serial.println("[1/4] TFT display already initialized early.");
+
+  // ============================================
+  // SIMULATED "OFF" STATE
+  // ============================================
+  Serial.println("Device is 'OFF'. Waiting for Power Button...");
+  
+  // Clear the screen and just draw the logo natively
+  clearScreen();
+  drawHeader();
+
+  // Wait endlessly for the Power Button to be clicked to turn "On"
+  while (digitalRead(POWER_BUTTON_PIN) == HIGH) {
+      vTaskDelay(pdMS_TO_TICKS(10)); // Yield to RTOS Watchdog
   }
+
+  // Button pressed! Wait for debounce/release before booting so it doesn't 
+  // immediately trigger anything else
+  while (digitalRead(POWER_BUTTON_PIN) == LOW) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+  }
+
+  Serial.println("Powering ON...");
+
+  // Now draw the normal boot UI elements
+  setUIMode("BOOTING");
+  setLastAction("Initializing...", false);
+  drawTopBar();
+  drawBottomPanel();
 
   delay(500);
 
@@ -655,15 +679,12 @@ void setup() {
   led.setPixelColor(0, led.Color(255, 165, 0));
   led.show();
 
-  // CRITICAL: Force the ESP32 radio into a clean state and explicitly
-  // enable AP+STA mode so it can broadcast the captive portal reliably.
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.disconnect(true, true);
+  // Use the standard Station Mode initialization cleanly before AutoConnect.
+  // WiFiManager will automatically switch to AP mode internally if there are
+  // no valid credentials saved in the NVS.
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
   delay(100);
-
-  // Set a specific static IP for the Captive Portal to prevent DHCP starvation
-  IPAddress apIP(192, 168, 4, 1);
-  wifiManager.setAPStaticIPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
   
   // CRITICAL: Make the setup portal non-blocking so the user can still
   // click the button to take offline pictures while the QR code is on screen!
