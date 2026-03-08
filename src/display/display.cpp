@@ -387,21 +387,15 @@ void displayCaptureFlash() {
 void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len) {
   if (!displayInitialized || !jpg_data) return;
 
-  int viewHeight = SCREEN_H - 40;
-  
-  // Protect the top and bottom panels
-  tft.setClipRect(0, 20, SCREEN_W, viewHeight);
-
-  // With a 320x172 screen and 400x300 downscaled image:
-  // Dynamically center it.
+  // Fullscreen camera preview — no UI bars
+  // With a 240x320 screen and 400x300 downscaled image:
+  // Center it on the full screen
   int xOffset = (SCREEN_W - 400) / 2;
-  int yOffset = 20 + (viewHeight - 300) / 2;
+  int yOffset = (SCREEN_H - 300) / 2;
   
   TJpgDec.drawJpg(xOffset, yOffset, jpg_data, jpg_len);
 
-  tft.clearClipRect();
-  
-  // CRITICAL FIX: Rapidly rendering JPEGs causes TFT_eSPI to hold the SPI bus
+  // CRITICAL FIX: Rapidly rendering JPEGs causes LovyanGFX to hold the SPI bus
   // Host clamping the CS hardware pin. We MUST forcibly end the transaction
   // here so the SD card can use the SPI module safely later.
   tft.endWrite();

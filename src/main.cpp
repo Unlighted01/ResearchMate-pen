@@ -802,6 +802,45 @@ void loop() {
   // If we don't call this continuously, the portal buttons won't work!
   wifiManager.process();
 
+  // === POWER BUTTON CHECK ===
+  // If the user presses the power button during operation, go back to "off" state
+  if (digitalRead(POWER_BUTTON_PIN) == LOW) {
+    // Debounce
+    delay(50);
+    if (digitalRead(POWER_BUTTON_PIN) == LOW) {
+      Serial.println("[Power] Button pressed — entering simulated OFF state...");
+      
+      // Stop all activity
+      livePreviewActive = false;
+      
+      // Show the "off" logo screen
+      clearScreen();
+      drawHeader();
+      
+      // Wait for button release first
+      while (digitalRead(POWER_BUTTON_PIN) == LOW) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+      
+      // Now wait for button press to "turn on" again
+      Serial.println("Device is 'OFF'. Waiting for Power Button...");
+      while (digitalRead(POWER_BUTTON_PIN) == HIGH) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+      
+      // Wait for release + debounce
+      while (digitalRead(POWER_BUTTON_PIN) == LOW) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+      delay(50);
+      
+      Serial.println("Powering ON...");
+      
+      // Restart the device cleanly to re-init WiFi etc.
+      ESP.restart();
+    }
+  }
+
   // Asynchronous WiFi Connection Handler
   if (WiFi.status() == WL_CONNECTED) {
     onWiFiConnected();
