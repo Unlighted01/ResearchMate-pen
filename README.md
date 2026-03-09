@@ -155,19 +155,15 @@ pio run --target upload --target monitor
 
 ---
 
-## 📝 Project Structure
+## 🧠 Strategic "Magic" Logic
+For a deep dive into the unique hardware solves (GPIO strapping evasion, RAM optimization, and robust pairing), see [docs/handover_prompt.md](file:///c:/Users/netne/ReserachMate/ResearchMate%20Smart%20pen/docs/handover_prompt.md).
 
-```
-ResearchMate Smart pen/
-├── src/
-│   ├── main.cpp              # Main firmware code
-│   ├── config.h              # Your credentials (DO NOT COMMIT)
-│   └── config.example.h      # Template file
-├── include/                  # Header files
-├── lib/                      # Custom libraries
-├── platformio.ini            # PlatformIO configuration
-└── README.md                 # This file
-```
+### Key Highlights:
+- **Lazy Init**: Camera and Serial start only after WiFi is stable, saving DRAM for the portal.
+- **Unique Pen IDs**: MAC-based identification prevents database collisions.
+- **Pairing Persistence**: 5-second auto-redraw loop ensures codes stay visible on the LCD.
+
+## 📝 Project Structure
 
 ---
 

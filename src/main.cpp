@@ -201,6 +201,14 @@ void handleRoot() {
 
 void handleCapture() {
   Serial.println("[Web] Request received: GET /capture");
+
+  // Lazy init camera if needed
+  if (!initCamera()) {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    server.send(500, "text/plain", "Camera Init Failed");
+    return;
+  }
+
   camera_fb_t *fb = captureFrame();
   if (!fb) {
     Serial.println("[Capture] ERROR: captureFrame returned NULL");
@@ -227,6 +235,14 @@ void handleCapture() {
 void handleSDCapture() {
   Serial.println("[Capture] Acquiring frame for SD Card...");
 
+  // Lazy init camera if needed
+  if (!initCamera()) {
+    Serial.println("[ERROR] SD Capture Failed: Camera init failed.");
+    setLastAction("Camera Error", true);
+    drawBottomPanel();
+    return;
+  }
+
   displayCaptureFlash();
   setLastAction("Scanning...", false);
   drawBottomPanel();
@@ -237,6 +253,7 @@ void handleSDCapture() {
     Serial.println("[ERROR] SD Capture Failed: No frame available.");
     setLastAction("Capture Error", true);
     drawBottomPanel();
+    displayReady(); // Ensure we return to clean state
     return;
   }
 
@@ -254,7 +271,8 @@ void handleSDCapture() {
 
     led.setPixelColor(0, led.Color(0, 255, 0)); // Green blink
     led.show();
-    delay(500);
+    // Non-blocking wait for LED feedback
+    vTaskDelay(pdMS_TO_TICKS(500)); 
 
   } else {
     Serial.println("[ERROR] Failed to save frame to SD Card memory.");
@@ -263,13 +281,27 @@ void handleSDCapture() {
 
     led.setPixelColor(0, led.Color(255, 0, 0)); // Red blink
     led.show();
-    delay(500);
+    vTaskDelay(pdMS_TO_TICKS(500));
   }
+
+  // CRITICAL: Always return display to READY state to clear "Capturing..."
+  displayReady();
 }
 
 void handleUpload() {
   Serial.println("[Web] Request received: POST /api/upload");
   server.sendHeader("Access-Control-Allow-Origin", "*");
+
+  // Lazy init camera if needed
+  if (!initCamera()) {
+     DynamicJsonDocument doc(128);
+     doc["status"] = "error";
+     doc["message"] = "Camera Init Failed";
+     String json;
+     serializeJson(doc, json);
+     server.send(500, "application/json", json);
+     return;
+  }
 
   // Show capture flash for visual feedback
   displayCaptureFlash();
@@ -456,18 +488,20 @@ void onWiFiConnected() {
 
   led.setPixelColor(0, led.Color(0, 0, 255));
   led.show();
-  delay(2000);
+  // delay(2000); // REPLACED WITH NON-BLOCKING APPROACH OR REMOVED FOR RESPONSIVENESS
 
   // Check pairing
   if (getAuthToken()) {
     Serial.println("[OK] Already paired!");
     isPaired = true;
     livePreviewActive = true;
+    setPairingStatus(true);
     displayReady();
     led.setPixelColor(0, led.Color(0, 255, 0));
     led.show();
   } else {
     Serial.println("[!] Not paired - starting pairing...");
+    setPairingStatus(false);
     char *code = startPairing();
     if (code) {
       strncpy(pairingCode, code, sizeof(pairingCode) - 1);
@@ -480,6 +514,18 @@ void onWiFiConnected() {
 
   Serial.println("\n=== READY ===");
   Serial.printf("Open: http://%s:8080\n", WiFi.localIP().toString().c_str());
+
+  // LAZY INIT: Start server and camera ONLY once WiFi is solid.
+  // This saves ~200KB DRAM for WiFiManager portal strings and DHCP buffers.
+  Serial.println("[LazyInit] Starting Web Server...");
+  server.begin();
+  
+  Serial.println("[LazyInit] Initializing Camera...");
+  if (initCamera()) {
+    Serial.println("      [OK] Camera ready (Post-WiFi)");
+  } else {
+    Serial.println("      [X] Camera failed to initialize (Post-WiFi)");
+  }
 }
 
 // ============================================
@@ -511,9 +557,8 @@ WiFiManager wifiManager;
 void setup() {
   // Power latch disabled - booting directly when plugged in
 
-  delay(5000);
   Serial.begin(115200);
-  delay(2000);
+  delay(1000); // Small delay to let serial monitor attach
 
   Serial.println("\n\n=================================");
   Serial.println("=== ResearchMate Smart Pen ===");
@@ -643,32 +688,12 @@ void setup() {
 
   delay(500);
 
-  // Camera
-  Serial.println("[2/4] Initializing camera...");
-  setLastAction("Camera init...", false);
-  drawBottomPanel();
-  if (!initCamera()) {
-    Serial.println("      [X] Camera FAILED!");
-    setLastAction("Camera Error", true);
-    drawBottomPanel();
-    led.setPixelColor(0, led.Color(255, 0, 0));
-    led.show();
-  } else {
-    Serial.println("      [OK] Camera ready");
-    led.setPixelColor(0, led.Color(0, 255, 0));
-    led.show();
-  }
-
-  delay(500);
-
-  // Cloud & Storage
-  Serial.println("[3/4] Initializing cloud & SD storage...");
+  // Cloud & Storage - We keep SD and Cloud structure init but defer hardware camera
+  Serial.println("[2/4] Initializing cloud & SD storage...");
   setLastAction("Storage init...", false);
   drawBottomPanel();
   initSDCard();
   initCloud();
-
-  delay(500);
 
   // WiFi
   Serial.println("[4/4] Connecting WiFi...");
@@ -680,19 +705,23 @@ void setup() {
   led.show();
 
   // Use the standard Station Mode initialization cleanly before AutoConnect.
-  // WiFiManager will automatically switch to AP mode internally if there are
-  // no valid credentials saved in the NVS.
   WiFi.mode(WIFI_STA);
-  WiFi.disconnect();
-  delay(100);
+  // Ensure the S3 WiFi modem doesn't sleep during the initial connection phase
+  WiFi.setSleep(false);
+  
+  // Check if we have saved credentials
+  if (WiFi.SSID() != "") {
+    Serial.printf("[WiFi] Saved credentials found for: %s\n", WiFi.SSID().c_str());
+  } else {
+    Serial.println("[WiFi] No saved credentials found.");
+  }
+  
+  vTaskDelay(pdMS_TO_TICKS(100));
   
   // CRITICAL: Make the setup portal non-blocking so the user can still
   // click the button to take offline pictures while the QR code is on screen!
   wifiManager.setConfigPortalBlocking(false);
-  
   wifiManager.setAPCallback(configModeCallback);
-  // Optional: timeout to prevent getting stuck in portal mode forever
-  // wifiManager.setConfigPortalTimeout(180);
 
   // AutoConnect does the magic
   if (!wifiManager.autoConnect(AP_NAME)) {
@@ -701,17 +730,14 @@ void setup() {
 
 
 
-  // Web server
+  // Web server endpoints registered but begin() deferred until WiFi is ready
   server.on("/", handleRoot);
   server.on("/capture", handleCapture);
   server.on("/api/upload", HTTP_POST, handleUpload);
   server.on("/api/pairing-start", HTTP_POST, handlePairingStart);
   server.on("/api/pairing-status", HTTP_GET, handlePairingStatus);
   server.on("/api/unpair", HTTP_POST, handleUnpair);
-  // --- [TO BE REMOVED LATER] ---
   server.on("/api/status", HTTP_GET, handleStatus);
-  // ----------------------------
-  server.begin();
 
   Serial.println("\n=== READY ===");
   Serial.printf("Open: http://%s:8080\n", WiFi.localIP().toString().c_str());
@@ -805,8 +831,8 @@ void loop() {
   // === POWER BUTTON CHECK ===
   // If the user presses the power button during operation, go back to "off" state
   if (digitalRead(POWER_BUTTON_PIN) == LOW) {
-    // Debounce
-    delay(50);
+    // Basic debounce
+    vTaskDelay(pdMS_TO_TICKS(50));
     if (digitalRead(POWER_BUTTON_PIN) == LOW) {
       Serial.println("[Power] Button pressed — entering simulated OFF state...");
       
@@ -825,14 +851,13 @@ void loop() {
       // Now wait for button press to "turn on" again
       Serial.println("Device is 'OFF'. Waiting for Power Button...");
       while (digitalRead(POWER_BUTTON_PIN) == HIGH) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(20)); // Longer delay for battery saving in "off" state
       }
       
       // Wait for release + debounce
       while (digitalRead(POWER_BUTTON_PIN) == LOW) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(50));
       }
-      delay(50);
       
       Serial.println("Powering ON...");
       
@@ -857,18 +882,34 @@ void loop() {
   // Periodic pairing check (Only if WiFi is actually connected!)
   if (WiFi.status() == WL_CONNECTED && !isPaired && (millis() - lastPairingCheck) > PAIRING_CHECK_INTERVAL) {
     lastPairingCheck = millis();
-    // ... rest of pairing loop
+    
     if (pairingCode[0] != '\0') {
+      // We have a code, check if user confirmed it on the site
       char *token = checkPairingStatus(pairingCode);
       if (token) {
         isPaired = true;
         livePreviewActive = true;
-        Serial.println("[OK] Device paired!");
+        setPairingStatus(true);
+        Serial.println("[OK] Device paired successfully!");
         displayReady();
-        delay(500);
-        displayReady(); // Clear again just to be safe before preview starts
         led.setPixelColor(0, led.Color(0, 255, 0));
         led.show();
+      } else {
+        // Not paired yet - Redraw the code to ensure it's still visible 
+        // (handles cases where screen might have been cleared by other actions)
+        displayPairingCode(pairingCode);
+      }
+    } else {
+      // No code yet - request one from server
+      Serial.println("[Pairing] Requesting new pairing code...");
+      char *code = startPairing();
+      if (code && code[0] != '\0') {
+        strncpy(pairingCode, code, sizeof(pairingCode) - 1);
+        displayPairingCode(pairingCode);
+        led.setPixelColor(0, led.Color(255, 165, 0)); // Orange for pairing
+        led.show();
+      } else {
+        Serial.println("[ERROR] Failed to get pairing code from server.");
       }
     }
   }

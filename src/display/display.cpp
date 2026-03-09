@@ -196,8 +196,7 @@ bool initDisplay() {
   tft.setTextWrap(false);
 
   // Initialize JPEG Decoder
-  TJpgDec.setJpgScale(
-      4); // Scale factor 4 native downsampling (1600x1200 -> 400x300)
+  TJpgDec.setJpgScale(1); // Scale factor 1 (320x240 -> 320x240) fits 240-wide screen best with centering
   TJpgDec.setSwapBytes(false); // LGFX handles RGB565 correctly natively
   TJpgDec.setCallback(tft_output);
 
@@ -388,10 +387,11 @@ void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len) {
   if (!displayInitialized || !jpg_data) return;
 
   // Fullscreen camera preview — no UI bars
-  // With a 240x320 screen and 400x300 downscaled image:
-  // Center it on the full screen
-  int xOffset = (SCREEN_W - 400) / 2;
-  int yOffset = (SCREEN_H - 300) / 2;
+  // With a 240x320 screen and 320x240 downscaled image:
+  // Center horizontally: (240 - 320) / 2 = -40
+  // Center vertically: (320 - 240) / 2 = 40
+  int xOffset = -40;
+  int yOffset = 40;
   
   TJpgDec.drawJpg(xOffset, yOffset, jpg_data, jpg_len);
 

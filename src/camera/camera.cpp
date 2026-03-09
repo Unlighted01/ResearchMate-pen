@@ -79,8 +79,10 @@ bool initCamera() {
     Serial.println(
         "[Camera] No PSRAM detected! Falling back to internal SRAM...");
     config.fb_location = CAMERA_FB_IN_DRAM;
-    config.frame_size = FRAMESIZE_VGA; 
-    config.fb_count = 2; // Need 2 buffers so the preview doesn't lock the capture thread
+    // CRITICAL MEMORY FIX: Reduce to QVGA (320x240) to save ~100KB DRAM 
+    // for WiFiManager portal strings and WebServer.
+    config.frame_size = FRAMESIZE_QVGA; 
+    config.fb_count = 1; // Single buffer in DRAM saves another 50KB
   }
 
   // Use LATEST so it drops stale frames and always gives us the current snapshot

@@ -12,8 +12,14 @@ The ResearchMate Smart Pen is a custom hardware device built on the **ESP32-S3-W
 3.  **The Ingestion Pipeline:** 
     - The pen uploads raw JPEG buffers directly to the Supabase Edge Function (`/smart-pen/index.ts`).
     - From there, the Edge Function proxies the image to the **Vercel OCR API**. 
-    - **Optimization:** Metadata (titles/summaries) is handled asynchronously by the Website dashboard to keep the hardware response time fast.
-4.  **Display Flash Prevention:**
+4.  **Stability & Power Management (NEW):**
+    - **WiFi Sleep:** `WiFi.setSleep(false)` is called *before* connection in `setup()` to prevent the S3 radio from entering low-power drops during the initial handshake.
+    - **WiFi Persistence (NEW):** Manual `WiFi.disconnect()` was removed from `setup()` to prevent the ESP32 from clearing saved session credentials on every reboot, ensuring it "sticks" to the known network.
+    - **Lazy Initialization (RAM FIX):** To resolve the "WiFi Portal White Screen" caused by DRAM exhaustion, `initCamera()` and `server.begin()` are deferred. They only start *after* WiFi is stable or when an offline capture is triggered. This maximizes available heap for `WiFiManager`.
+    - **Robust Pairing UI (NEW):** Added a periodic retry loop and a 5-second automatic redraw in `main.cpp`. This ensures the pairing code remains visible on the LCD until pairing is confirmed, preventing it from being cleared by other UI events.
+    - **Unified Pairing State (NEW):** `display.cpp` state is now explicitly synced via `setPairingStatus()` whenever `isPaired` changes in `main.cpp`. This prevents the camera from triggering while the device technically shows an `[UNPAIRED]` status.
+    - **Camera Scaling (NEW):** The JPEG scale is set to `1` (320x240) and centered both horizontally and vertically on the 240x320 display. This provides a full-width camera preview for the user.
+5.  **Display Flash Prevention:**
     - Before calling `ESP.restart()` (after factory resets or updates), the firmware executes `displaySleep()`. This puts the ILI9341 controller into a sleeping state and disables the backlight to prevent a jarring "white flash" during the reboot sequence.
 
 ### 🛠️ Hardware Stack

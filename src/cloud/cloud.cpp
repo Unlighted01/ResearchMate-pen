@@ -29,7 +29,18 @@ static char g_responseBuffer[8192] = {0};
 // Helper Functions
 // ============================================
 
-// Generate random 6-digit code
+// Returns a unique ID like "ResearchMate-SmartPen-A1B2C3" using MAC address
+const char *getUniquePenID() {
+  static char uniqueId[48] = {0};
+  if (uniqueId[0] == '\0') {
+    uint8_t mac[6];
+    WiFi.macAddress(mac);
+    snprintf(uniqueId, sizeof(uniqueId), "%s-%02X%02X%02X", DEVICE_NAME, mac[3], mac[4], mac[5]);
+  }
+  return uniqueId;
+}
+
+// Generate random 6-digit code - [LEGACY / LOCAL ONLY]
 static void generatePairingCode() {
   uint32_t code = 100000 + (esp_random() % 900000);
   snprintf(g_pairingCode, sizeof(g_pairingCode), "%06d", code);
@@ -145,7 +156,7 @@ char *startPairing() {
   // Send request to edge function - server will generate the code
   JsonDocument doc;
   doc["action"] = "start";
-  doc["pen_id"] = DEVICE_NAME;
+  doc["pen_id"] = getUniquePenID();
 
   String jsonStr;
   serializeJson(doc, jsonStr);
@@ -165,12 +176,14 @@ char *startPairing() {
       if (serverCode) {
         strncpy(g_pairingCode, serverCode, sizeof(g_pairingCode) - 1);
         g_pairingCode[sizeof(g_pairingCode) - 1] = '\0';
-        LOG_DEBUG("[Pairing] Got code from server: %s", g_pairingCode);
+        Serial.printf("[Pairing] Code from server: %s (Pen: %s)\n", g_pairingCode, getUniquePenID());
         return g_pairingCode;
       }
     } else {
-      LOG_ERROR("[Pairing] Failed to register code");
+      Serial.printf("[Pairing] Server error: %s\n", response);
     }
+  } else {
+    Serial.println("[Pairing] HTTP POST failed!");
   }
 
   return NULL;
@@ -187,7 +200,7 @@ char *checkPairingStatus(const char *code) {
   // Check if pairing was confirmed
   JsonDocument doc;
   doc["action"] = "status";
-  doc["pen_id"] = DEVICE_NAME;
+  doc["pen_id"] = getUniquePenID();
   doc["code"] = code;
 
   String jsonStr;
