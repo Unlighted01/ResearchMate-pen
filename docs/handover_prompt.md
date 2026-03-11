@@ -40,4 +40,4 @@ The ResearchMate Smart Pen is a custom hardware device built on the **ESP32-S3-W
 
 ### ⚠️ Dev Notes
 - **White Screen?** Check the breadboard connections on GPIO 35 (MOSI). The ILI9341 RDDID command will return 0x00 if the SPI bus is physically disconnected.
-- **Factory Reset:** Triggered by holding the Power Button (GPIO 1) for 5 seconds during the boot logo.
+- **Factory Reset:** Triggered by a long press of the Capture button during normal operation, then holding it for 5 seconds while the wipe UI completes to confirm. (The previous boot-time reset logic was removed).

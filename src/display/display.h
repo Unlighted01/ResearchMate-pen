@@ -45,6 +45,7 @@ void displayWipeProgress(int pct);
 void displayWipeCancelled();
 void displayWipeComplete();
 void displaySleep();
+void displaySyncing();
 
 // Show WiFi Setup QR Code centered in the viewfinder zone
 void displayWiFiSetupQR(const char *ssid);

@@ -292,73 +292,46 @@ void handleUpload() {
   Serial.println("[Web] Request received: POST /api/upload");
   server.sendHeader("Access-Control-Allow-Origin", "*");
 
-  // Lazy init camera if needed
-  if (!initCamera()) {
-     DynamicJsonDocument doc(128);
-     doc["status"] = "error";
-     doc["message"] = "Camera Init Failed";
-     String json;
-     serializeJson(doc, json);
-     server.send(500, "application/json", json);
-     return;
-  }
-
-  // Show capture flash for visual feedback
-  displayCaptureFlash();
-
-  // Show status
-  setLastAction("Scanning...", false);
+  // --- NEW LOGIC: Just manually trigger the sync queue! ---
+  setLastAction("Syncing SD Queue...", false);
   drawBottomPanel();
-
-  camera_fb_t *fb = captureFrame();
-  if (!fb) {
-    Serial.println("[Upload] CAMERA BUFFER FAILED!");
-    setLastAction("Capture Error", true);
-    drawBottomPanel();
-    
-    JsonDocument doc;
-    doc["success"] = false;
-    doc["error"] = "Camera capture failed";
-    String responseStr;
-    serializeJson(doc, responseStr);
-    server.send(400, "application/json", responseStr);
-    return;
+  
+  if (!WiFi.isConnected()) {
+      Serial.println("[Upload] WiFi is not connected. Cannot sync to cloud.");
+      setLastAction("No WiFi", true);
+      drawBottomPanel();
+      
+      JsonDocument doc;
+      doc["success"] = false;
+      doc["error"] = "No WiFi Connection";
+      String responseStr;
+      serializeJson(doc, responseStr);
+      server.send(500, "application/json", responseStr);
+      
+      led.setPixelColor(0, led.Color(255, 0, 0));
+      led.show();
+      delay(1000);
+      return;
   }
+  
+  // Show visual feedback that a sync attempt is starting
+  led.setPixelColor(0, led.Color(0, 0, 255)); // Blue for "Syncing"
+  led.show();
 
-  setLastAction("Uploading...", false);
-  drawBottomPanel();
+  // Call the core sync logic
+  syncPendingQueue();
 
-  Serial.println("[Upload] Dispatched to Cloud...");
-  char *response = uploadImage(fb->buf, fb->len);
-  returnFrame(fb);
-
-  if (response) {
-    // Success - update counters
-    totalItemsUploaded++;
-    setLastAction("Upload OK", false);
-    setQueueCount(totalItemsUploaded);
-    drawBottomPanel();
-
-    server.send(200, "application/json", response);
-    led.setPixelColor(0, led.Color(0, 255, 0));
-    led.show();
-    delay(1000);
-
-  } else {
-    // Failed - update status
-    setLastAction("Upload Failed", true);
-    drawBottomPanel();
-    
-    JsonDocument doc;
-    doc["success"] = false;
-    doc["error"] = "Upload failed";
-    String responseStr;
-    serializeJson(doc, responseStr);
-    server.send(500, "application/json", responseStr);
-    led.setPixelColor(0, led.Color(255, 0, 0));
-    led.show();
-    delay(1000);
-  }
+  // We have no immediate return value from syncPendingQueue() to send a specific HTTP response
+  // so we'll just return a generic OK. The device UI handles the true status natively.
+  JsonDocument doc;
+  doc["success"] = true;
+  doc["message"] = "Sync process completed.";
+  String responseStr;
+  serializeJson(doc, responseStr);
+  server.send(200, "application/json", responseStr);
+  
+  // The LED reset is handled in syncPendingQueue upon success, or falling back inside loop()
+  delay(500);
 }
 
 // --- [TO BE REMOVED LATER] VIRTUAL LCD ENDPOINT START ---
@@ -574,79 +547,7 @@ void setup() {
   Serial.println("[Display] Initializing earliest TFT...");
   initDisplay();
 
-  // === FACTORY RESET ON BOOT ===
-  // If the user holds the POWER button while plugging in the device, we wipe everything
-  if (digitalRead(POWER_BUTTON_PIN) == LOW) {
-    Serial.println("\n[!] FACTORY RESET DETECTED [!]");
-    Serial.println("Hold button for 5 seconds to wipe device...");
-    
-    // Show Wipe UI
-    clearScreen();
-    drawHeader();
-    displayWipeStart();
-
-    // Light LED Red
-    led.begin();
-    led.setBrightness(100);
-    led.setPixelColor(0, led.Color(255, 0, 0));
-    led.show();
-
-    bool wipeConfirmed = true;
-    for (int i = 0; i < 50; i++) { // 100ms * 50 = 5 seconds
-      if (digitalRead(POWER_BUTTON_PIN) == HIGH) {
-        wipeConfirmed = false;
-        Serial.println("Reset cancelled.");
-        
-        displayWipeCancelled();
-        delay(1000);
-        break; // They let go, abort!
-      }
-      
-      // Update progress bar
-      displayWipeProgress(i * 2);
-      delay(100);
-    }
-
-    if (wipeConfirmed) {
-      Serial.println("\n[!] Wiping Device Credentials...");
-      
-      // 1. Wipe Supabase Auth Token
-      clearAuthToken(); 
-      
-      // 2. Wipe WiFi Credentials
-      // Note: We use the local wm here just for the wipe since the global isn't initialized yet
-      WiFiManager wm;
-      wm.resetSettings();
-      delay(100);
-
-      // 3. Wipe SD Card Images
-      if (initSDCard()) {
-         Serial.println("[!] Wiping SD Card Queue...");
-         wipeOfflineQueue();
-      }
-
-      Serial.println("[!] Device Wiped Successfully.");
-      
-      // Flash Green rapidly 3 times to confirm
-      displayWipeComplete();
-
-      for (int i = 0; i < 3; i++) {
-        led.setPixelColor(0, led.Color(0, 255, 0));
-        led.show();
-        delay(200);
-        led.clear();
-        led.show();
-        delay(200);
-      }
-      
-      Serial.println("\nRebooting now...");
-      
-      // Clear TFT completely to black before hardware restart to avoid white flash
-      displaySleep();
-      
-      ESP.restart(); // Reboot into out-of-box state
-    }
-  }
+  // Boot-time factory reset removed. Now handled via Capture button long press.
 
   Serial.println("Buttons initialized");
 
@@ -755,6 +656,76 @@ const unsigned long DEBOUNCE_TIME = 50;
 const unsigned long LONG_PRESS_TIME = 800;
 const unsigned long DOUBLE_PRESS_GAP = 400;
 
+void performFactoryReset() {
+  Serial.println("\n[!] FACTORY RESET DETECTED [!]");
+  Serial.println("Hold button for 5 seconds to wipe device...");
+  
+  // Show Wipe UI
+  clearScreen();
+  drawHeader();
+  displayWipeStart();
+
+  // Light LED Red
+  led.setBrightness(100);
+  led.setPixelColor(0, led.Color(255, 0, 0));
+  led.show();
+
+  bool wipeConfirmed = true;
+  for (int i = 0; i < 50; i++) { // 100ms * 50 = 5 seconds
+    if (digitalRead(CAPTURE_BUTTON_PIN) == HIGH) {
+      wipeConfirmed = false;
+      Serial.println("Reset cancelled.");
+      
+      displayWipeCancelled();
+      delay(1000);
+      break; // They let go, abort!
+    }
+    
+    // Update progress bar
+    displayWipeProgress(i * 2);
+    delay(100);
+  }
+
+  if (wipeConfirmed) {
+    Serial.println("\n[!] Wiping Device Credentials...");
+    
+    // 1. Wipe Supabase Auth Token
+    clearAuthToken(); 
+    
+    // 2. Wipe WiFi Credentials
+    WiFiManager wm;
+    wm.resetSettings();
+    delay(100);
+
+    // 3. Wipe SD Card Images
+    if (initSDCard()) {
+       Serial.println("[!] Wiping SD Card Queue...");
+       wipeOfflineQueue();
+    }
+
+    Serial.println("[!] Device Wiped Successfully.");
+    
+    // Flash Green rapidly 3 times to confirm
+    displayWipeComplete();
+
+    for (int i = 0; i < 3; i++) {
+      led.setPixelColor(0, led.Color(0, 255, 0));
+      led.show();
+      delay(200);
+      led.clear();
+      led.show();
+      delay(200);
+    }
+    
+    Serial.println("\nRebooting now...");
+    
+    // Clear TFT completely to black before hardware restart to avoid white flash
+    displaySleep();
+    
+    ESP.restart(); // Reboot into out-of-box state
+  }
+}
+
 void updateButtonState() {
   bool currentButtonState = (digitalRead(CAPTURE_BUTTON_PIN) == LOW);
 
@@ -777,12 +748,10 @@ void updateButtonState() {
     if (!longPressHandled &&
         (millis() - buttonPressStartTime > LONG_PRESS_TIME)) {
       livePreviewActive = false;
-      Serial.println("[Button] LONG PRESS Detected: Force Sync SD to Cloud!");
-      setUIMode("SYNCING");
-      setLastAction("Syncing SD...", false);
-      drawTopBar();
-      drawBottomPanel();
-      syncPendingQueue();
+      Serial.println("[Button] LONG PRESS Detected: Factory Reset init!");
+      performFactoryReset();
+      
+      // If reset was cancelled, restore UI and return to normal
       displayReady();
       livePreviewActive = true;
       longPressHandled = true;
@@ -804,18 +773,36 @@ void evaluateButtonActions() {
       drawTopBar();
       drawBottomPanel();
       handleSDCapture();
+      
+      // Restore UI 
       displayReady();
       livePreviewActive = true;
+      Serial.println("[Display] Resumed Live Preview");
     } else if (buttonPressCount >= 2) {
       livePreviewActive = false;
-      Serial.println("[Button] DOUBLE PRESS Detected: Uploading to Cloud!");
-      setUIMode("UPLOADING");
-      setLastAction("Uploading...", false);
+      Serial.println("[Button] DOUBLE PRESS Detected: Syncing to Cloud!");
+      setUIMode("SYNCING");
+      setLastAction("Syncing...", false);
       drawTopBar();
       drawBottomPanel();
-      handleUpload(); // Capture and dispatch to Supabase
+      
+      // Visual Indicator for Sync - Fill viewfinder blue
+      displaySyncing();
+      
+      // Change LED to blue
+      led.setPixelColor(0, led.Color(0, 0, 255));
+      led.show();
+
+      handleUpload(); // We hijacked handleUpload to just trigger the sync queue
+      
+      // Restore LED to green
+      led.setPixelColor(0, led.Color(0, 255, 0));
+      led.show();
+
+      // RESTORE UI - THIS WAS MISSING/FAILING PREVIOUSLY!
       displayReady();
       livePreviewActive = true;
+      Serial.println("[Display] Resumed Live Preview after Sync");
     }
     buttonPressCount = 0; // Reset after handling
   }

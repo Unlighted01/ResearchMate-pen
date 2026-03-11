@@ -147,12 +147,26 @@ uint8_t *readImageFromSD(const String &filename, size_t *outSize) {
     return nullptr;
   }
 
-  size_t readLen = file.read(buffer, size);
+  // CRITICAL FIX FOR SPI TIMEOUTS: Read in chunks and yield to the RTOS
+  // The ESP32 will crash/hang the SPI bus if we do a blocking multi-kilobyte read
+  size_t totalRead = 0;
+  const size_t CHUNK_SIZE = 1024; // Read 1KB at a time
+
+  while (totalRead < size) {
+    size_t toRead = size - totalRead;
+    if (toRead > CHUNK_SIZE) toRead = CHUNK_SIZE;
+    
+    size_t bytesRead = file.read(buffer + totalRead, toRead);
+    if (bytesRead == 0) break; // End of file or error
+    
+    totalRead += bytesRead;
+    vTaskDelay(pdMS_TO_TICKS(5)); // Yield 5ms to WiFi / Display tasks
+  }
+
   file.close();
 
-  if (readLen != size) {
-    LOG_ERROR("[SD] Read failed. Expected %d bytes, read %d bytes", size,
-              readLen);
+  if (totalRead != size) {
+    LOG_ERROR("[SD] Read failed. Expected %d bytes, read %d bytes", size, totalRead);
     free(buffer);
     *outSize = 0;
     return nullptr;
