@@ -45,6 +45,7 @@ void displayWipeProgress(int pct);
 void displayWipeCancelled();
 void displayWipeComplete();
 void displaySleep();
+void displaySyncing();
 
 // Show hold-to-reset progress bar in the viewfinder zone (0–100)
 // Call repeatedly while button is held; call with -1 to cancel/clear

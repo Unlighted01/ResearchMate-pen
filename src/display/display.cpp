@@ -80,8 +80,10 @@ static bool displayInitialized = false;
 extern void updateButtonState();
 
 bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t *bitmap) {
-  // Ultra-fast poll of button during decode chunks
-  updateButtonState();
+  // CRITICAL FIX: Removed updateButtonState() poll from here!
+  // If updateButtonState() triggers a button press event that writes to the SD card,
+  // it will attempt to use the SPI hardware while TJpgDec is actively transmitting
+  // to the TFT display over SPI, causing a violent crash and unrecoverable port lock!
 
   // Check if part of the image is completely off screen
   if (y >= tft.height() || x >= tft.width())
@@ -476,5 +478,15 @@ void displaySleep() {
   tft.waitDisplay();
   tft.setBrightness(0);
   tft.sleep();
+}
+
+void displaySyncing() {
+  if (!displayInitialized) return;
+  // Fill viewfinder blue
+  tft.fillRect(0, 32, 240, 240, 0x031A); // Dark blue sync background
+  tft.setTextColor(WHITE);
+  tft.setTextSize(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString("SYNCING...", 120, 150);
 }
 
