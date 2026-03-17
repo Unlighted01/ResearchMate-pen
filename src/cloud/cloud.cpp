@@ -20,7 +20,7 @@ static Preferences prefs;
 static char g_authToken[256] = {0};
 static char g_pairingCode[16] = {0};
 static unsigned long g_pairingStartTime = 0;
-static const unsigned long PAIRING_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+static unsigned long g_pairingExpiryMs = 5UL * 60UL * 1000UL; // default 5 min, overridden by server
 
 // Response buffer (reusable for JSON responses)
 static char g_responseBuffer[8192] = {0};
@@ -134,7 +134,7 @@ bool initCloud() {
   return true;
 }
 
-char *startPairing() {
+char *startPairing(unsigned long *expiresInMs) {
   LOG_DEBUG("[Pairing] Starting pairing process");
 
   if (!WiFi.isConnected()) {
@@ -142,12 +142,13 @@ char *startPairing() {
     return NULL;
   }
 
-  // Check if we have a valid code that hasn't expired (5 minute cooldown)
+  // Return cached code if still within server-provided expiry window
   unsigned long elapsed = millis() - g_pairingStartTime;
-  if (g_pairingCode[0] != '\0' && elapsed < PAIRING_TIMEOUT) {
-    unsigned long remaining = (PAIRING_TIMEOUT - elapsed) / 1000;
+  if (g_pairingCode[0] != '\0' && elapsed < g_pairingExpiryMs) {
+    unsigned long remaining = (g_pairingExpiryMs - elapsed) / 1000;
     LOG_DEBUG("[Pairing] Using existing code: %s (expires in %lu sec)",
               g_pairingCode, remaining);
+    if (expiresInMs) *expiresInMs = g_pairingExpiryMs;
     return g_pairingCode;
   }
 
@@ -171,12 +172,18 @@ char *startPairing() {
     DeserializationError error = deserializeJson(respDoc, response);
 
     if (!error && respDoc["success"]) {
-      // Use the code from server response, not local
       const char *serverCode = respDoc["code"];
       if (serverCode) {
         strncpy(g_pairingCode, serverCode, sizeof(g_pairingCode) - 1);
         g_pairingCode[sizeof(g_pairingCode) - 1] = '\0';
-        Serial.printf("[Pairing] Code from server: %s (Pen: %s)\n", g_pairingCode, getUniquePenID());
+
+        // Use server-provided expiry (expires_in is in seconds)
+        unsigned long serverExpiry = respDoc["expires_in"] | 300; // fallback 300s
+        g_pairingExpiryMs = serverExpiry * 1000UL;
+        if (expiresInMs) *expiresInMs = g_pairingExpiryMs;
+
+        Serial.printf("[Pairing] Code from server: %s (expires in %lu sec, Pen: %s)\n",
+                      g_pairingCode, serverExpiry, getUniquePenID());
         return g_pairingCode;
       }
     } else {

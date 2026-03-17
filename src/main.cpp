@@ -22,9 +22,13 @@ Adafruit_NeoPixel led(1, LED_PIN, NEO_GRB + NEO_KHZ800);
 static char lastCapturedFilename[64] = {0};
 static char pairingCode[16] = {0};
 static bool isPaired = false;
-static bool livePreviewActive = false; // Add live preview state
+static bool livePreviewActive = false;
 static unsigned long lastPairingCheck = 0;
 static const unsigned long PAIRING_CHECK_INTERVAL = 5000;
+static unsigned long pairingCodeTimestamp = 0;
+static unsigned long pairingCodeExpiry = 5UL * 60UL * 1000UL; // updated from server's expires_in
+static bool needsFactoryReset = false;
+static bool hasHandledConnect = false;
 
 // Camera debug state
 static int totalItemsUploaded = 0;
@@ -34,9 +38,6 @@ static char lastCaptureStatus[32] = "Ready";
 // Button state tracking (polling)
 static bool lastCaptureButtonState = HIGH; // Default high (INPUT_PULLUP)
 static unsigned long captureButtonPressStart = 0;
-
-// static bool lastPowerButtonState = HIGH; // Dedicated power button
-// static unsigned long powerButtonPressStart = 0;
 
 // ============================================
 // Web Handlers (from original project)
@@ -294,7 +295,7 @@ void handleUpload() {
 
   // Lazy init camera if needed
   if (!initCamera()) {
-     DynamicJsonDocument doc(128);
+     JsonDocument doc;
      doc["status"] = "error";
      doc["message"] = "Camera Init Failed";
      String json;
@@ -342,13 +343,13 @@ void handleUpload() {
     server.send(200, "application/json", response);
     led.setPixelColor(0, led.Color(0, 255, 0));
     led.show();
-    delay(1000);
+    vTaskDelay(pdMS_TO_TICKS(300)); // Short LED flash, yields to RTOS
 
   } else {
     // Failed - update status
     setLastAction("Upload Failed", true);
     drawBottomPanel();
-    
+
     JsonDocument doc;
     doc["success"] = false;
     doc["error"] = "Upload failed";
@@ -357,7 +358,7 @@ void handleUpload() {
     server.send(500, "application/json", responseStr);
     led.setPixelColor(0, led.Color(255, 0, 0));
     led.show();
-    delay(1000);
+    vTaskDelay(pdMS_TO_TICKS(300));
   }
 }
 
@@ -382,13 +383,15 @@ void handleStatus() {
 // --- [TO BE REMOVED LATER] VIRTUAL LCD ENDPOINT END ---
 
 void handlePairingStart() {
-  char *code = startPairing();
+  char *code = startPairing(&pairingCodeExpiry);
 
   JsonDocument doc;
   if (code) {
     doc["success"] = true;
     doc["code"] = code;
     strncpy(pairingCode, code, sizeof(pairingCode) - 1);
+    pairingCodeTimestamp = millis();
+    doc["expires_in"] = pairingCodeExpiry / 1000;
     displayPairingCode(pairingCode);
   } else {
     doc["success"] = false;
@@ -426,8 +429,9 @@ void handleUnpair() {
   clearAuthToken();
   isPaired = false;
   pairingCode[0] = '\0';
+  pairingCodeTimestamp = 0;
 
-  char *code = startPairing();
+  char *code = startPairing(&pairingCodeExpiry);
 
   JsonDocument doc;
   doc["success"] = true;
@@ -445,32 +449,36 @@ void handleUnpair() {
   led.show();
 }
 
-void handleFactoryReset() {
+void triggerFactoryReset() {
   Serial.println("[System] Factory resetting Wi-Fi and Cloud credentials...");
-  setUIMode("FACTORY RESET");
-  setLastAction("Wiping Data...", true);
-  drawTopBar();
-  drawBottomPanel();
 
-  // Wipe Cloud Pairing
+  // Wipe pairing state
   clearAuthToken();
   isPaired = false;
+  pairingCode[0] = '\0';
+  pairingCodeTimestamp = 0;
+  livePreviewActive = false;
+  hasHandledConnect = false; // Allow onWiFiConnected to re-fire after reconnect
 
-  // Wipe Wi-Fi Manager Settings
-  WiFiManager wm;
-  wm.resetSettings();
+  // Schedule WiFi reset + portal in main loop (avoids blocking here)
+  needsFactoryReset = true;
 
-  server.send(200, "text/plain",
-              "Factory Reset Complete! Rebooting into AP Setup Mode...");
-  delay(1000);
-  ESP.restart();
+  setUIMode("FACTORY RESET");
+  setLastAction("Resetting...", true);
+  drawTopBar();
+  drawBottomPanel();
+  led.setPixelColor(0, led.Color(255, 0, 0));
+  led.show();
+}
+
+void handleFactoryReset() {
+  triggerFactoryReset();
+  server.send(200, "text/plain", "Factory Reset initiated. Entering WiFi Setup Mode...");
 }
 
 // ============================================
 // Asynchronous WiFi Connection Handler
 // ============================================
-static bool hasHandledConnect = false;
-
 void onWiFiConnected() {
   if (hasHandledConnect) return;
   hasHandledConnect = true;
@@ -478,7 +486,11 @@ void onWiFiConnected() {
   Serial.printf("\n[OK] WiFi connected! IP: %s\n",
                 WiFi.localIP().toString().c_str());
   setWiFiStatus(true);
+  setUIMode("CONNECTED");
   setLastAction("WiFi Connected", false);
+
+  // Immediately clear the viewfinder so the WiFi setup QR doesn't linger
+  clearViewfinder();
   drawTopBar();
   drawBottomPanel();
 
@@ -488,7 +500,6 @@ void onWiFiConnected() {
 
   led.setPixelColor(0, led.Color(0, 0, 255));
   led.show();
-  // delay(2000); // REPLACED WITH NON-BLOCKING APPROACH OR REMOVED FOR RESPONSIVENESS
 
   // Check pairing
   if (getAuthToken()) {
@@ -502,10 +513,11 @@ void onWiFiConnected() {
   } else {
     Serial.println("[!] Not paired - starting pairing...");
     setPairingStatus(false);
-    char *code = startPairing();
+    char *code = startPairing(&pairingCodeExpiry);
     if (code) {
       strncpy(pairingCode, code, sizeof(pairingCode) - 1);
-      Serial.printf("Pairing code: %s\n", pairingCode);
+      pairingCodeTimestamp = millis();
+      Serial.printf("Pairing code: %s (expires in %lu ms)\n", pairingCode, pairingCodeExpiry);
       displayPairingCode(pairingCode);
       led.setPixelColor(0, led.Color(255, 165, 0));
       led.show();
@@ -558,97 +570,20 @@ void setup() {
   // Power latch disabled - booting directly when plugged in
 
   Serial.begin(115200);
-  delay(1000); // Small delay to let serial monitor attach
+  delay(100);
 
   Serial.println("\n\n=================================");
   Serial.println("=== ResearchMate Smart Pen ===");
   Serial.println("=== TFT Display + Camera ===");
   Serial.println("=================================\n");
 
-  // Set up both buttons
   pinMode(CAPTURE_BUTTON_PIN, INPUT_PULLUP);
-  pinMode(POWER_BUTTON_PIN, INPUT_PULLUP);
 
   // Initialize TFT really early so we can show wipe progress on screen
   // (Note: Do not add delays before this, the display chip power-on timing requests immediate init)
   Serial.println("[Display] Initializing earliest TFT...");
   initDisplay();
 
-  // === FACTORY RESET ON BOOT ===
-  // If the user holds the POWER button while plugging in the device, we wipe everything
-  if (digitalRead(POWER_BUTTON_PIN) == LOW) {
-    Serial.println("\n[!] FACTORY RESET DETECTED [!]");
-    Serial.println("Hold button for 5 seconds to wipe device...");
-    
-    // Show Wipe UI
-    clearScreen();
-    drawHeader();
-    displayWipeStart();
-
-    // Light LED Red
-    led.begin();
-    led.setBrightness(100);
-    led.setPixelColor(0, led.Color(255, 0, 0));
-    led.show();
-
-    bool wipeConfirmed = true;
-    for (int i = 0; i < 50; i++) { // 100ms * 50 = 5 seconds
-      if (digitalRead(POWER_BUTTON_PIN) == HIGH) {
-        wipeConfirmed = false;
-        Serial.println("Reset cancelled.");
-        
-        displayWipeCancelled();
-        delay(1000);
-        break; // They let go, abort!
-      }
-      
-      // Update progress bar
-      displayWipeProgress(i * 2);
-      delay(100);
-    }
-
-    if (wipeConfirmed) {
-      Serial.println("\n[!] Wiping Device Credentials...");
-      
-      // 1. Wipe Supabase Auth Token
-      clearAuthToken(); 
-      
-      // 2. Wipe WiFi Credentials
-      // Note: We use the local wm here just for the wipe since the global isn't initialized yet
-      WiFiManager wm;
-      wm.resetSettings();
-      delay(100);
-
-      // 3. Wipe SD Card Images
-      if (initSDCard()) {
-         Serial.println("[!] Wiping SD Card Queue...");
-         wipeOfflineQueue();
-      }
-
-      Serial.println("[!] Device Wiped Successfully.");
-      
-      // Flash Green rapidly 3 times to confirm
-      displayWipeComplete();
-
-      for (int i = 0; i < 3; i++) {
-        led.setPixelColor(0, led.Color(0, 255, 0));
-        led.show();
-        delay(200);
-        led.clear();
-        led.show();
-        delay(200);
-      }
-      
-      Serial.println("\nRebooting now...");
-      
-      // Clear TFT completely to black before hardware restart to avoid white flash
-      displaySleep();
-      
-      ESP.restart(); // Reboot into out-of-box state
-    }
-  }
-
-  Serial.println("Buttons initialized");
 
   // LED
   led.begin();
@@ -658,35 +593,11 @@ void setup() {
 
   Serial.println("[1/4] TFT display already initialized early.");
 
-  // ============================================
-  // SIMULATED "OFF" STATE
-  // ============================================
-  Serial.println("Device is 'OFF'. Waiting for Power Button...");
-  
-  // Clear the screen and just draw the logo natively
-  clearScreen();
-  drawHeader();
-
-  // Wait endlessly for the Power Button to be clicked to turn "On"
-  while (digitalRead(POWER_BUTTON_PIN) == HIGH) {
-      vTaskDelay(pdMS_TO_TICKS(10)); // Yield to RTOS Watchdog
-  }
-
-  // Button pressed! Wait for debounce/release before booting so it doesn't 
-  // immediately trigger anything else
-  while (digitalRead(POWER_BUTTON_PIN) == LOW) {
-      vTaskDelay(pdMS_TO_TICKS(10));
-  }
-
-  Serial.println("Powering ON...");
-
   // Now draw the normal boot UI elements
   setUIMode("BOOTING");
   setLastAction("Initializing...", false);
   drawTopBar();
   drawBottomPanel();
-
-  delay(500);
 
   // Cloud & Storage - We keep SD and Cloud structure init but defer hardware camera
   Serial.println("[2/4] Initializing cloud & SD storage...");
@@ -721,6 +632,8 @@ void setup() {
   // CRITICAL: Make the setup portal non-blocking so the user can still
   // click the button to take offline pictures while the QR code is on screen!
   wifiManager.setConfigPortalBlocking(false);
+  wifiManager.setConnectTimeout(10);      // Give up trying to connect after 10s → start AP
+  wifiManager.setConfigPortalTimeout(0); // Portal stays open indefinitely (no auto-close)
   wifiManager.setAPCallback(configModeCallback);
 
   // AutoConnect does the magic
@@ -737,6 +650,7 @@ void setup() {
   server.on("/api/pairing-start", HTTP_POST, handlePairingStart);
   server.on("/api/pairing-status", HTTP_GET, handlePairingStatus);
   server.on("/api/unpair", HTTP_POST, handleUnpair);
+  server.on("/api/factory-reset", HTTP_POST, handleFactoryReset);
   server.on("/api/status", HTTP_GET, handleStatus);
 
   Serial.println("\n=== READY ===");
@@ -748,44 +662,61 @@ static unsigned long buttonPressStartTime = 0;
 static unsigned long buttonReleaseTime = 0;
 static int buttonPressCount = 0;
 static bool isButtonPressed = false;
-static bool longPressHandled = false;
+static bool factoryResetHandled = false;
+static bool buttonReleasedSinceBoot = false;
 
 // Time thresholds (milliseconds)
 const unsigned long DEBOUNCE_TIME = 50;
-const unsigned long LONG_PRESS_TIME = 800;
 const unsigned long DOUBLE_PRESS_GAP = 400;
+const unsigned long FACTORY_RESET_TIME = 5000;
 
 void updateButtonState() {
   bool currentButtonState = (digitalRead(CAPTURE_BUTTON_PIN) == LOW);
+
+  // Don't process anything until button is released at least once after boot.
+  // Prevents factory reset re-trigger if button is still held during ESP.restart().
+  if (!buttonReleasedSinceBoot) {
+    if (!currentButtonState) buttonReleasedSinceBoot = true;
+    return;
+  }
 
   if (currentButtonState && !isButtonPressed) {
     if (millis() - buttonReleaseTime > DEBOUNCE_TIME) {
       isButtonPressed = true;
       buttonPressStartTime = millis();
-      longPressHandled = false;
+      factoryResetHandled = false;
     }
   } else if (!currentButtonState && isButtonPressed) {
     isButtonPressed = false;
     unsigned long pressDuration = millis() - buttonPressStartTime;
     buttonReleaseTime = millis();
 
-    if (!longPressHandled && pressDuration > DEBOUNCE_TIME &&
-        pressDuration < LONG_PRESS_TIME) {
+    // If user was holding long enough to see the progress bar but released early, clear it
+    if (!factoryResetHandled && pressDuration > 500) {
+      displayFactoryResetProgress(-1); // Cancelled — restore UI
+    }
+
+    if (!factoryResetHandled && pressDuration > DEBOUNCE_TIME) {
       buttonPressCount++;
     }
   } else if (currentButtonState && isButtonPressed) {
-    if (!longPressHandled &&
-        (millis() - buttonPressStartTime > LONG_PRESS_TIME)) {
-      livePreviewActive = false;
-      Serial.println("[Button] LONG PRESS Detected: Force Sync SD to Cloud!");
-      setUIMode("SYNCING");
-      setLastAction("Syncing SD...", false);
-      drawTopBar();
-      drawBottomPanel();
-      syncPendingQueue();
-      displayReady();
-      livePreviewActive = true;
-      longPressHandled = true;
+    unsigned long held = millis() - buttonPressStartTime;
+
+    // Show progress bar after 500ms hold (throttled to ~100ms redraws)
+    static unsigned long lastProgressUpdate = 0;
+    if (!factoryResetHandled && held > 500 && millis() - lastProgressUpdate > 100) {
+      lastProgressUpdate = millis();
+      int pct = (int)min(100UL, held * 100UL / FACTORY_RESET_TIME);
+      displayFactoryResetProgress(pct == 0 ? 1 : pct); // avoid re-drawing static elements at 0
+    }
+
+    // 5s hold: Factory reset (wipe WiFi + pairing, no reboot)
+    if (!factoryResetHandled && held > FACTORY_RESET_TIME) {
+      Serial.println("[Button] FACTORY RESET: Wiping WiFi + Pairing...");
+      displayFactoryResetProgress(100);
+      vTaskDelay(pdMS_TO_TICKS(200)); // Brief pause so user sees 100%
+      triggerFactoryReset();
+      factoryResetHandled = true;
       buttonPressCount = 0;
     }
   }
@@ -822,49 +753,31 @@ void evaluateButtonActions() {
 }
 
 void loop() {
+  // Handle factory reset: wipe WiFi creds and re-enter AP config portal
+  if (needsFactoryReset) {
+    needsFactoryReset = false;
+
+    // Wipe credentials before reboot so the device boots straight into AP mode.
+    // Re-running autoConnect() on the existing wifiManager object leaves internal
+    // portal/DNS server state inconsistent, causing the captive portal to render blank.
+    wifiManager.resetSettings();
+    WiFi.disconnect(true); // also erases ESP32's internal credential store
+
+    setUIMode("RESTARTING");
+    setLastAction("Restarting...", false);
+    drawTopBar();
+    drawBottomPanel();
+    clearViewfinder();
+
+    delay(1000);
+    ESP.restart();
+  }
+
   server.handleClient();
-  
+
   // CRITICAL: Process the background non-blocking WiFi Setup portal.
   // If we don't call this continuously, the portal buttons won't work!
   wifiManager.process();
-
-  // === POWER BUTTON CHECK ===
-  // If the user presses the power button during operation, go back to "off" state
-  if (digitalRead(POWER_BUTTON_PIN) == LOW) {
-    // Basic debounce
-    vTaskDelay(pdMS_TO_TICKS(50));
-    if (digitalRead(POWER_BUTTON_PIN) == LOW) {
-      Serial.println("[Power] Button pressed — entering simulated OFF state...");
-      
-      // Stop all activity
-      livePreviewActive = false;
-      
-      // Show the "off" logo screen
-      clearScreen();
-      drawHeader();
-      
-      // Wait for button release first
-      while (digitalRead(POWER_BUTTON_PIN) == LOW) {
-        vTaskDelay(pdMS_TO_TICKS(10));
-      }
-      
-      // Now wait for button press to "turn on" again
-      Serial.println("Device is 'OFF'. Waiting for Power Button...");
-      while (digitalRead(POWER_BUTTON_PIN) == HIGH) {
-        vTaskDelay(pdMS_TO_TICKS(20)); // Longer delay for battery saving in "off" state
-      }
-      
-      // Wait for release + debounce
-      while (digitalRead(POWER_BUTTON_PIN) == LOW) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-      }
-      
-      Serial.println("Powering ON...");
-      
-      // Restart the device cleanly to re-init WiFi etc.
-      ESP.restart();
-    }
-  }
 
   // Asynchronous WiFi Connection Handler
   if (WiFi.status() == WL_CONNECTED) {
@@ -884,27 +797,34 @@ void loop() {
     lastPairingCheck = millis();
     
     if (pairingCode[0] != '\0') {
-      // We have a code, check if user confirmed it on the site
-      char *token = checkPairingStatus(pairingCode);
-      if (token) {
-        isPaired = true;
-        livePreviewActive = true;
-        setPairingStatus(true);
-        Serial.println("[OK] Device paired successfully!");
-        displayReady();
-        led.setPixelColor(0, led.Color(0, 255, 0));
-        led.show();
+      // Auto-expire code using server-provided expiry window
+      if (millis() - pairingCodeTimestamp > pairingCodeExpiry) {
+        Serial.println("[Pairing] Code expired, requesting new one...");
+        pairingCode[0] = '\0';
+        pairingCodeTimestamp = 0;
       } else {
-        // Not paired yet - Redraw the code to ensure it's still visible 
-        // (handles cases where screen might have been cleared by other actions)
-        displayPairingCode(pairingCode);
+        // We have a valid code — check if user confirmed it on the site
+        char *token = checkPairingStatus(pairingCode);
+        if (token) {
+          isPaired = true;
+          livePreviewActive = true;
+          setPairingStatus(true);
+          Serial.println("[OK] Device paired successfully!");
+          displayReady();
+          led.setPixelColor(0, led.Color(0, 255, 0));
+          led.show();
+        } else {
+          // Not paired yet - redraw code so it stays visible
+          displayPairingCode(pairingCode);
+        }
       }
     } else {
       // No code yet - request one from server
       Serial.println("[Pairing] Requesting new pairing code...");
-      char *code = startPairing();
+      char *code = startPairing(&pairingCodeExpiry);
       if (code && code[0] != '\0') {
         strncpy(pairingCode, code, sizeof(pairingCode) - 1);
+        pairingCodeTimestamp = millis();
         displayPairingCode(pairingCode);
         led.setPixelColor(0, led.Color(255, 165, 0)); // Orange for pairing
         led.show();
@@ -932,5 +852,9 @@ void loop() {
     }
   }
 
-  delay(10);
+  // Only yield briefly when idle (not paired/previewing) so wifiManager.process()
+  // and server.handleClient() can serve HTTP as fast as possible.
+  if (!isPaired || !livePreviewActive) {
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
 }

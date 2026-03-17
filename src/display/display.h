@@ -46,6 +46,10 @@ void displayWipeCancelled();
 void displayWipeComplete();
 void displaySleep();
 
+// Show hold-to-reset progress bar in the viewfinder zone (0–100)
+// Call repeatedly while button is held; call with -1 to cancel/clear
+void displayFactoryResetProgress(int pct);
+
 // Show WiFi Setup QR Code centered in the viewfinder zone
 void displayWiFiSetupQR(const char *ssid);
 
@@ -57,6 +61,9 @@ void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len);
 
 // Flash screen when capturing (visual feedback) - restricted to viewfinder
 void displayCaptureFlash();
+
+// Clear only the viewfinder zone (between top bar and bottom panel)
+void clearViewfinder();
 
 // Restore the screen back to a ready/idle visual state
 void displayReady();

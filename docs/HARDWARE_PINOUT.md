@@ -63,7 +63,6 @@
 | ---------------------- | ----------- | --------------- | ---------------------------- |
 | **RGB LED**            | GPIO 48     | WS2812B         | NeoPixel status indicator    |
 | **Capture Button**     | GPIO 2      | Input + Pull-up | Active LOW, wired to GND     |
-| **Power/Reset Button** | GPIO 1      | Input + Pull-up | Active LOW, wired to GND     |
 
 ---
 
@@ -106,5 +105,5 @@ ESP32-S3-CAM                     SD Card Reader
 ESP32-S3-CAM                     Components
 │   GPIO 48 ───┼─→ WS2812B DIN
 │   GPIO 2  ───┼─→ Capture Button ─→ GND
-│   GPIO 1  ───┼─→ Power Button ──→ GND
+│   GPIO 1  ───┼─→ (unused — power controlled by hardware latch switch)
 ```

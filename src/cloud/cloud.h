@@ -9,8 +9,9 @@
 // ============================================
 bool initCloud();
 
-// Start pairing: returns 6-digit code
-char* startPairing();
+// Start pairing: returns 6-digit code from server.
+// expiresInMs (optional): set to the server-provided expiry in milliseconds.
+char* startPairing(unsigned long *expiresInMs = nullptr);
 
 // Check if pairing was confirmed (returns auth token if paired)
 char* checkPairingStatus(const char* code);

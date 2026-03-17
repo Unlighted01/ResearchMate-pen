@@ -208,11 +208,7 @@ bool initDisplay() {
   tft.setTextDatum(MC_DATUM);
   tft.drawString("v1.0", SCREEN_W / 2, SCREEN_H / 2);
 
-  // Loading bar animation
-  for (int i = 0; i <= 100; i += 10) {
-    drawProgressBar(SCREEN_H / 2 + 40, i, CYAN);
-    delay(50);
-  }
+  drawProgressBar(SCREEN_H / 2 + 40, 100, CYAN);
 
   displayInitialized = true;
   Serial.println("[Display] Ready!");
@@ -329,10 +325,15 @@ void displayWiFiSetupQR(const char *ssid) {
     }
   }
 
-  // Draw text hint below the QR code
+  // Draw text hints below the QR code
+  int hintY = startY + qrWidth + 14;
   tft.setTextColor(CYAN);
   tft.setTextDatum(MC_DATUM);
-  tft.drawString("Scan QR Setup", SCREEN_W / 2, startY + qrWidth + 15);
+  tft.drawString(ssid, SCREEN_W / 2, hintY);
+  tft.setTextColor(GRAY);
+  tft.drawString("Connect above, then open:", SCREEN_W / 2, hintY + 14);
+  tft.setTextColor(GOLD);
+  tft.drawString("192.168.4.1", SCREEN_W / 2, hintY + 26);
 }
 
 void displayPairingCode(const char *code) {
@@ -358,6 +359,11 @@ void displayPairingCode(const char *code) {
   // Waiting animation hint
   tft.setTextColor(CYAN);
   tft.drawString("Waiting for link...", SCREEN_W / 2, 140);
+}
+
+void clearViewfinder() {
+  if (!displayInitialized) return;
+  tft.fillRect(0, 32, W, 240, BG_DARK);
 }
 
 void displayReady() {
@@ -435,6 +441,33 @@ void displayWipeComplete() {
   tft.setTextSize(2);
   tft.setTextColor(GREEN);
   tft.drawString("WIPED!", SCREEN_W / 2, SCREEN_H / 2);
+}
+
+void displayFactoryResetProgress(int pct) {
+  if (!displayInitialized) return;
+
+  if (pct < 0) {
+    // Cancelled — restore normal UI
+    displayReady();
+    return;
+  }
+
+  if (pct == 0) {
+    // First call — draw static elements once
+    tft.fillRect(0, 32, W, 240, BG_DARK);
+    setUIMode("HOLD TO RESET");
+    drawTopBar();
+    tft.setTextColor(RED);
+    tft.setTextSize(2);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("FACTORY RESET", W / 2, 120);
+    tft.setTextSize(1);
+    tft.setTextColor(GRAY);
+    tft.drawString("Release to cancel", W / 2, 155);
+  }
+
+  // Update only the progress bar area
+  drawProgressBar(180, pct, RED);
 }
 
 void displaySleep() {

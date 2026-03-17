@@ -80,7 +80,7 @@ SD Card:      CS=42, MOSI=41, MISO=40, SCK=39
 Camera:       DVP parallel on GPIO 4-18 (hardwired on module)
 LED:          GPIO 48 (WS2812B)
 Capture Btn:  GPIO 2 (INPUT_PULLUP → GND)
-Power Btn:    GPIO 1 (INPUT_PULLUP → GND)
+Power:        Hardware latch switch on power line (GPIO 1 unused)
 ```
 
 ---
