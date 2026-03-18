@@ -5,21 +5,27 @@
 
 ## ESP32-S3-WROOM-N16R8-CAM Pin Assignments
 
-### � TFT Display - SPI Interface (ILI9341, LovyanGFX)
+### TFT Display - SPI Interface
 
-| Function              | GPIO        | Notes                   |
-| --------------------- | ----------- | ----------------------- |
-| **MOSI** (Master Out) | **GPIO 35** | SPI Data to display     |
-| **CLK** (SPI Clock)   | **GPIO 37** | SPI Clock               |
-| **MISO** (Master In)  | **GPIO 36** | SPI Data from display   |
-| **CS** (Chip Select)  | **GPIO 38** | Active LOW              |
-| **DC** (Data/Command) | **GPIO 14** | HIGH=Data, LOW=Command  |
-| **RST** (Reset)       | **GPIO 21** | Active LOW hardware RST |
-| **BL** (Backlight)    | **GPIO 47** | PWM backlight control   |
+> **MIGRATION IN PROGRESS (2026-03-18):** Replacing broken 2.4" ILI9341 (240×320) with 1.8" ST7735 (128×160).
+> GPIO assignments are unchanged — only the driver IC and resolution differ.
+> Code changes required: see `WORKING_BUILD.md` migration section.
 
-**Driver:** LovyanGFX v1.2.19, `Panel_ILI9341`, `SPI2_HOST` (FSPI), 27MHz write clock  
-**Panel Config:** 240×320, no offset, `invert=false`, `rgb_order=false`, `bus_shared=true`  
+| Function              | GPIO        | Notes                                    |
+| --------------------- | ----------- | ---------------------------------------- |
+| **MOSI** (Master Out) | **GPIO 35** | SPI Data — mapped to `SDA` on ST7735 PCB |
+| **CLK** (SPI Clock)   | **GPIO 37** | SPI Clock                                |
+| ~~**MISO**~~          | ~~GPIO 36~~ | **NOT CONNECTED** — ST7735 is write-only (no touch) |
+| **CS** (Chip Select)  | **GPIO 38** | Active LOW                               |
+| **DC** (Data/Command) | **GPIO 14** | HIGH=Data, LOW=Command — labeled `AO` on ST7735 PCB |
+| **RST** (Reset)       | **GPIO 21** | Active LOW hardware RST                  |
+| **BL** (Backlight)    | **GPIO 47** | PWM backlight control — labeled `LED` on ST7735 PCB |
+
+**New Driver:** LovyanGFX v1.2.19, `Panel_ST7735`, `SPI2_HOST` (FSPI), 27MHz write clock
+**New Panel Config:** 128×160, `spi_3wire=true`, `pin_miso=-1`, `invert=false`, `rgb_order=false`, `bus_shared=true`
 **Backlight:** `Light_PWM`, `pwm_channel=7`, `freq=44100`, `invert=false`
+
+**Previous (broken) display:** 2.4" TFT SPI 240×320 V1.3, `Panel_ILI9341`, MISO=GPIO 36, had touch controller (T_IRQ/T_DO/T_DIN/T_CS/T_CLK — unused)
 
 ---
 
@@ -81,15 +87,15 @@
 ## 🔌 Wiring Diagram
 
 ```
-ESP32-S3-CAM                     ILI9341 TFT Display
+ESP32-S3-CAM                     ST7735 1.8" TFT (128x160)
 ┌──────────────┐                ┌──────────────┐
-│   GPIO 35 ───┼────────────────┼─→ MOSI (SDA) │
-│   GPIO 37 ───┼────────────────┼─→ SCK (CLK)  │
-│   GPIO 36 ───┼────────────────┼─→ MISO       │
+│   GPIO 35 ───┼────────────────┼─→ SDA (MOSI) │
+│   GPIO 37 ───┼────────────────┼─→ SCK        │
+│   (no wire)  │                │  (no MISO)   │
 │   GPIO 38 ───┼────────────────┼─→ CS         │
-│   GPIO 14 ───┼────────────────┼─→ DC         │
-│   GPIO 21 ───┼────────────────┼─→ RST        │
-│   GPIO 47 ───┼────────────────┼─→ BL         │
+│   GPIO 14 ───┼────────────────┼─→ AO (DC)    │
+│   GPIO 21 ───┼────────────────┼─→ RESET       │
+│   GPIO 47 ───┼────────────────┼─→ LED (BL)   │
 │   3.3V ──────┼────────────────┼─→ VCC        │
 │   GND ───────┼────────────────┼─→ GND        │
 └──────────────┘                └──────────────┘
