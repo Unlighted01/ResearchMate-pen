@@ -682,7 +682,7 @@ void performFactoryReset() {
     // 1. Wipe Supabase Auth Token
     clearAuthToken(); 
     
-    // 2. Wipe WiFi Credentials
+    // 2. Wipe WiFi CredentialsCtrl + Shift + P → Arduino: Select Serial Port
     WiFiManager wm;
     wm.resetSettings();
     delay(100);
