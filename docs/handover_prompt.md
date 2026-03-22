@@ -9,9 +9,12 @@ The ResearchMate Smart Pen is a custom hardware device built on the **ESP32-S3-W
 2.  **Concurrency & Watchdogs:**
     - Firmware utilizes **FreeRTOS** tasks. All blocking waits use `vTaskDelay` to yield to the RTOS scheduler and prevent hardware watchdog resets.
     - Display updates use **LovyanGFX**, which is significantly faster than TFT_eSPI, allowing smooth camera previews while managing background SD card writes.
-3.  **The Ingestion Pipeline:** 
+3.  **The Ingestion Pipeline:**
     - The pen uploads raw JPEG buffers directly to the Supabase Edge Function (`/smart-pen/index.ts`).
-    - From there, the Edge Function proxies the image to the **Vercel OCR API**. 
+    - The Edge Function validates the image (JPEG magic bytes `0xFF 0xD8 0xFF`, max 10MB) before proxying to the **Vercel OCR API**.
+    - On OCR failure, the item is saved with `ocr_failed: true` and `ocr_error` in the DB — the pen receives HTTP 422 instead of a silent empty result.
+    - Scans are stored as `image/jpeg` in Supabase Storage (previously incorrectly stored as `image/bmp`).
+    - The Vercel OCR URL is configured via Supabase secret `VERCEL_OCR_URL` (run: `supabase secrets set VERCEL_OCR_URL=https://...`).
 4.  **Stability & Power Management (NEW):**
     - **WiFi Sleep:** `WiFi.setSleep(false)` is called *before* connection in `setup()` to prevent the S3 radio from entering low-power drops during the initial handshake.
     - **WiFi Persistence (NEW):** Manual `WiFi.disconnect()` was removed from `setup()` to prevent the ESP32 from clearing saved session credentials on every reboot, ensuring it "sticks" to the known network.
