@@ -68,9 +68,13 @@ static bool httpRequest(const char *method, const char *endpoint,
   http.setReuse(false);
   http.begin(url);
 
-  // Increase timeout since Supabase edge functions can take >5s to cold start
-  // and image binary uploads require stable connections
-  http.setTimeout(30000);
+  // Dynamic timeout: 30s for large image uploads, 10s for pairing/status checks.
+  // This prevents the background task from hanging indefinitely if the server is slow.
+  if (strstr(contentType, "image")) {
+    http.setTimeout(30000);
+  } else {
+    http.setTimeout(10000);
+  }
 
   http.addHeader("Content-Type", contentType);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);

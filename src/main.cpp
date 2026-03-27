@@ -39,6 +39,10 @@ static char lastCaptureStatus[32] = "Ready";
 static bool lastCaptureButtonState = HIGH; // Default high (INPUT_PULLUP)
 static unsigned long captureButtonPressStart = 0;
 
+// Background Cloud Sync State
+static TaskHandle_t cloudTaskHandle = NULL;
+static bool forceSyncNext = false; // Flag to trigger immediate sync from web app
+
 // ============================================
 // Web Handlers (from original project)
 // ============================================
@@ -319,8 +323,8 @@ void handleUpload() {
   led.setPixelColor(0, led.Color(0, 0, 255)); // Blue for "Syncing"
   led.show();
 
-  // Call the core sync logic
-  syncPendingQueue();
+  // Call the core sync logic - via flag to background task!
+  forceSyncNext = true;
 
   // We have no immediate return value from syncPendingQueue() to send a specific HTTP response
   // so we'll just return a generic OK. The device UI handles the true status natively.
@@ -631,6 +635,59 @@ void setup() {
 
   Serial.println("\n=== READY ===");
   Serial.printf("Open: http://%s:8080\n", WiFi.localIP().toString().c_str());
+
+  // Create the background cloud task (lower priority than main loop)
+  xTaskCreate(
+      [](void *pvParameters) {
+        for (;;) {
+          // 1. Skip all cloud operations if we are in WiFi Setup / Config Mode
+          // or if WiFi is disconnected. This is CRITICAL for the captive portal!
+          if (!WiFi.isConnected() || wifiManager.getConfigPortalActive()) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            continue;
+          }
+
+          // 2. Handle Pairing (Check/Request)
+          if (!isPaired && pairingCode[0] != '\0') {
+             // Auto-expire
+             if (millis() - pairingCodeTimestamp > pairingCodeExpiry) {
+               pairingCode[0] = '\0';
+               pairingCodeTimestamp = 0;
+             } else {
+               char *token = checkPairingStatus(pairingCode);
+               if (token) {
+                 isPaired = true;
+                 livePreviewActive = true;
+                 setPairingStatus(true);
+                 // UI notifications can stay simple/atomic here
+               }
+             }
+          } else if (!isPaired && pairingCode[0] == '\0') {
+             // Request new code
+             char *code = startPairing(&pairingCodeExpiry);
+             if (code && code[0] != '\0') {
+               strncpy(pairingCode, code, sizeof(pairingCode) - 1);
+               pairingCodeTimestamp = millis();
+             }
+          }
+
+          // 3. Handle SD Queue Sync (Periodic or Forced)
+          static unsigned long lastBackgroundSync = 0;
+          if (isPaired && (forceSyncNext || (millis() - lastBackgroundSync > 10000))) {
+            forceSyncNext = false;
+            lastBackgroundSync = millis();
+            syncPendingQueue();
+          }
+
+          vTaskDelay(pdMS_TO_TICKS(500)); // Sleep 500ms between rounds
+        }
+      },
+      "cloudTask", 
+      8192,  // Stack size
+      NULL,  // Param
+      1,     // Priority (lower than loop)
+      &cloudTaskHandle
+  );
 }
 
 // Button debouncing and multi-press tracking
@@ -856,54 +913,8 @@ void loop() {
   // We can just omit drawing here unless state changes.
   // Removed old displayCameraDebug.
 
-  // Periodic pairing check (Only if WiFi is actually connected!)
-  if (WiFi.status() == WL_CONNECTED && !isPaired && (millis() - lastPairingCheck) > PAIRING_CHECK_INTERVAL) {
-    lastPairingCheck = millis();
-    
-    if (pairingCode[0] != '\0') {
-      // Auto-expire code using server-provided expiry window
-      if (millis() - pairingCodeTimestamp > pairingCodeExpiry) {
-        Serial.println("[Pairing] Code expired, requesting new one...");
-        pairingCode[0] = '\0';
-        pairingCodeTimestamp = 0;
-      } else {
-        // We have a valid code — check if user confirmed it on the site
-        char *token = checkPairingStatus(pairingCode);
-        if (token) {
-          isPaired = true;
-          livePreviewActive = true;
-          setPairingStatus(true);
-          Serial.println("[OK] Device paired successfully!");
-          displayReady();
-          led.setPixelColor(0, led.Color(0, 255, 0));
-          led.show();
-        } else {
-          // Not paired yet - redraw code so it stays visible
-          displayPairingCode(pairingCode);
-        }
-      }
-    } else {
-      // No code yet - request one from server
-      Serial.println("[Pairing] Requesting new pairing code...");
-      char *code = startPairing(&pairingCodeExpiry);
-      if (code && code[0] != '\0') {
-        strncpy(pairingCode, code, sizeof(pairingCode) - 1);
-        pairingCodeTimestamp = millis();
-        displayPairingCode(pairingCode);
-        led.setPixelColor(0, led.Color(255, 165, 0)); // Orange for pairing
-        led.show();
-      } else {
-        Serial.println("[ERROR] Failed to get pairing code from server.");
-      }
-    }
-  }
-
-  // Periodic SD Sync Queue Check (every 10 seconds, only if WiFi is connected)
-  static unsigned long lastSyncCheck = 0;
-  if (WiFi.status() == WL_CONNECTED && millis() - lastSyncCheck > 10000) {
-    lastSyncCheck = millis();
-    syncPendingQueue();
-  }
+  // NOTE: Pairing and Sync checks were moved to background cloudTask!
+  // This loop now only handles UI, button polling, and non-blocking WiFi tasks.
 
   // --- LIVE CAMERA PREVIEW ---
   // Suspend camera pulling during double-press gap to allow fast polling of
