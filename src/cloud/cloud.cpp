@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <Preferences.h>
 #include <WiFi.h>
 
@@ -58,15 +59,17 @@ static bool httpRequest(const char *method, const char *endpoint,
     return false;
   }
 
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure(); // Skip CA verification — Supabase has a valid cert
+                              // but bundling root CAs wastes flash and breaks on rotation
+
   HTTPClient http;
   String url = String(SUPABASE_URL) + endpoint;
 
   LOG_DEBUG("[HTTP] %s %s (size: %d)", method, url.c_str(), bodySize);
 
-  // CRITICAL: Disable TLS session caching. After a wipe/soft reboot, stale TLS 
-  // session keys will cause the SSL handshake to fail for the new pairing request.
   http.setReuse(false);
-  http.begin(url);
+  http.begin(secureClient, url);
 
   // Dynamic timeout: 30s for large image uploads, 10s for pairing/status checks.
   // This prevents the background task from hanging indefinitely if the server is slow.
@@ -344,15 +347,17 @@ char *uploadImage(const uint8_t *imageData, size_t imageSize) {
 static bool httpRequestStream(const char *endpoint, File &file, size_t fileSize, char *responseOut, size_t responseMaxSize) {
   if (!WiFi.isConnected()) return false;
 
+  WiFiClientSecure secureClient;
+  secureClient.setInsecure();
+
   HTTPClient http;
   String url = String(SUPABASE_URL) + endpoint;
-  
+
   LOG_DEBUG("[HTTP] POST Stream %s (size: %d)", url.c_str(), fileSize);
-  
-  // We MUST use a secure client for Supabase HTTPS routing
+
   http.setReuse(false);
-  http.setTimeout(30000); // 30s timeout for slow SD reads and chunk uploads
-  http.begin(url);
+  http.setTimeout(30000);
+  http.begin(secureClient, url);
   
   http.addHeader("Content-Type", "image/jpeg");
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_ANON_KEY);

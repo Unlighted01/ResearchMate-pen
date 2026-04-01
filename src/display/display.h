@@ -1,6 +1,6 @@
 // ============================================
 // TFT Display Driver - ResearchMate
-// ST7789 172x320 Display Test
+// ILI9163 1.8" — 128x160 portrait
 // ============================================
 
 #ifndef DISPLAY_H
@@ -57,7 +57,7 @@ void displayWiFiSetupQR(const char *ssid);
 // Show pairing code prominently centered in the viewfinder zone
 void displayPairingCode(const char *code);
 
-// Draw a raw JPEG frame onto the screen, cropped to the 240x240 viewfinder
+// Draw a raw JPEG frame (320x240 camera output) scaled into the content zone
 void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len);
 
 // Flash screen when capturing (visual feedback) - restricted to viewfinder

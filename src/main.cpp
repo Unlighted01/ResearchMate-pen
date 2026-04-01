@@ -42,6 +42,7 @@ static unsigned long captureButtonPressStart = 0;
 // Background Cloud Sync State
 static TaskHandle_t cloudTaskHandle = NULL;
 static bool forceSyncNext = false; // Flag to trigger immediate sync from web app
+static volatile bool pairingJustSucceeded = false; // Set by background task, consumed by main loop
 
 // ============================================
 // Web Handlers (from original project)
@@ -239,6 +240,10 @@ void handleCapture() {
 
 void handleSDCapture() {
   Serial.println("[Capture] Acquiring frame for SD Card...");
+
+  // Switch to full UXGA resolution for OCR-quality capture (preview runs at QVGA)
+  setHighResCapture();
+  vTaskDelay(pdMS_TO_TICKS(150)); // one frame at 10MHz XCLK to flush the QVGA buffer
 
   // Lazy init camera if needed
   if (!initCamera()) {
@@ -659,7 +664,7 @@ void setup() {
                  isPaired = true;
                  livePreviewActive = true;
                  setPairingStatus(true);
-                 // UI notifications can stay simple/atomic here
+                 pairingJustSucceeded = true; // signal main loop to update display
                }
              }
           } else if (!isPaired && pairingCode[0] == '\0') {
@@ -671,11 +676,11 @@ void setup() {
              }
           }
 
-          // 3. Handle SD Queue Sync (Periodic or Forced)
-          static unsigned long lastBackgroundSync = 0;
-          if (isPaired && (forceSyncNext || (millis() - lastBackgroundSync > 10000))) {
+          // 3. Handle SD Queue Sync (Only when explicitly triggered by double press)
+          // NOTE: Periodic auto-sync intentionally removed. Single press = SD only.
+          // Double press = user-initiated upload. Background task must not steal photos.
+          if (isPaired && forceSyncNext) {
             forceSyncNext = false;
-            lastBackgroundSync = millis();
             syncPendingQueue();
           }
 
@@ -693,15 +698,18 @@ void setup() {
 // Button debouncing and multi-press tracking
 static unsigned long buttonPressStartTime = 0;
 static unsigned long buttonReleaseTime = 0;
-static int buttonPressCount = 0;
+// buttonPressCount removed — replaced by pendingButtonAction (long-press model)
 static bool isButtonPressed = false;
 static bool factoryResetHandled = false;
 static bool buttonReleasedSinceBoot = false;
 
 // Time thresholds (milliseconds)
-const unsigned long DEBOUNCE_TIME = 50;
-const unsigned long DOUBLE_PRESS_GAP = 400;
-const unsigned long FACTORY_RESET_TIME = 5000;
+const unsigned long DEBOUNCE_TIME    = 50;
+const unsigned long LONG_PRESS_TIME  = 800;   // hold ≥ 800ms then release → cloud upload
+const unsigned long FACTORY_RESET_TIME = 5000; // hold ≥ 5s → factory reset
+
+// Action determined on release: 0=none, 1=short(SD save), 2=long(upload)
+static int pendingButtonAction = 0;
 
 void performFactoryReset() {
   Serial.println("\n[!] FACTORY RESET DETECTED [!]");
@@ -784,92 +792,123 @@ void updateButtonState() {
   }
 
   if (currentButtonState && !isButtonPressed) {
+    // Button just pressed
     if (millis() - buttonReleaseTime > DEBOUNCE_TIME) {
       isButtonPressed = true;
       buttonPressStartTime = millis();
       factoryResetHandled = false;
     }
   } else if (!currentButtonState && isButtonPressed) {
+    // Button just released
     isButtonPressed = false;
     unsigned long pressDuration = millis() - buttonPressStartTime;
     buttonReleaseTime = millis();
 
-    // If user was holding long enough to see the progress bar but released early, clear it
-    if (!factoryResetHandled && pressDuration > 500) {
-      displayFactoryResetProgress(-1); // Cancelled — restore UI
-    }
-
-    if (!factoryResetHandled && pressDuration > DEBOUNCE_TIME) {
-      buttonPressCount++;
+    Serial.printf("[Button] Released: duration=%lums, factoryHandled=%d\n", pressDuration, factoryResetHandled);
+    if (!factoryResetHandled && pressDuration >= DEBOUNCE_TIME) {
+      if (pressDuration >= LONG_PRESS_TIME) {
+        // Long press (800ms–5s): cloud upload
+        Serial.println("[Button] -> LONG PRESS detected (upload)");
+        pendingButtonAction = 2;
+        displayFactoryResetProgress(-1); // clear the progress bar
+      } else {
+        // Short press (< 800ms): SD save
+        Serial.println("[Button] -> SHORT PRESS detected (SD save)");
+        pendingButtonAction = 1;
+      }
+    } else if (!factoryResetHandled && pressDuration > 500) {
+      displayFactoryResetProgress(-1); // clear bar on early release
     }
   } else if (currentButtonState && isButtonPressed) {
     unsigned long held = millis() - buttonPressStartTime;
-
-    // Show progress bar after 500ms hold (throttled to ~100ms redraws)
     static unsigned long lastProgressUpdate = 0;
+
+    // Show a blue progress bar during upload-hold zone (800ms → 5000ms)
+    // Turns red when entering factory-reset zone
     if (!factoryResetHandled && held > 500 && millis() - lastProgressUpdate > 100) {
       lastProgressUpdate = millis();
       int pct = (int)min(100UL, held * 100UL / FACTORY_RESET_TIME);
-      displayFactoryResetProgress(pct == 0 ? 1 : pct); // avoid re-drawing static elements at 0
+      displayFactoryResetProgress(pct == 0 ? 1 : pct);
     }
 
-    // 5s hold: Factory reset (wipe WiFi + pairing, no reboot)
+    // 5s hold: Factory reset
     if (!factoryResetHandled && held > FACTORY_RESET_TIME) {
       Serial.println("[Button] FACTORY RESET: Wiping WiFi + Pairing...");
       displayFactoryResetProgress(100);
-      vTaskDelay(pdMS_TO_TICKS(200)); // Brief pause so user sees 100%
+      vTaskDelay(pdMS_TO_TICKS(200));
       triggerFactoryReset();
       factoryResetHandled = true;
-      buttonPressCount = 0;
+      pendingButtonAction = 0;
     }
   }
 }
 
 void evaluateButtonActions() {
-  if (buttonPressCount > 0 && !isButtonPressed &&
-      (millis() - buttonReleaseTime > DOUBLE_PRESS_GAP)) {
-    // CRITICAL: We only evaluate actions AFTER the double-press window expires.
+  // Actions are set on button release — consume immediately when button is up
+  if (pendingButtonAction == 0 || isButtonPressed) return;
 
-    if (buttonPressCount == 1) {
-      livePreviewActive = false;
-      Serial.println("[Button] SINGLE PRESS Detected: Saving to SD Card!");
-      setUIMode("SAVING");
-      setLastAction("Saving to SD...", false);
-      drawTopBar();
+  int action = pendingButtonAction;
+  pendingButtonAction = 0;
+
+  if (action == 1) {
+    // Short press: capture and save to SD card only
+    livePreviewActive = false;
+    Serial.println("[Button] SHORT PRESS: Saving to SD Card!");
+    setUIMode("SAVING");
+    setLastAction("Saving to SD...", false);
+    drawTopBar();
+    drawBottomPanel();
+    handleSDCapture();
+    displayReady();
+    livePreviewActive = true;
+    Serial.println("[Display] Resumed Live Preview");
+
+  } else if (action == 2) {
+    // Long press: upload existing SD photo to cloud
+    livePreviewActive = false;
+    Serial.println("[Button] LONG PRESS: Uploading SD photo to Cloud!");
+    setUIMode("SYNCING");
+    setLastAction("Uploading...", false);
+    drawTopBar();
+    drawBottomPanel();
+    displaySyncing();
+    led.setPixelColor(0, led.Color(0, 0, 255));
+    led.show();
+
+    if (!WiFi.isConnected()) {
+      Serial.println("[Button] LONG PRESS: No WiFi.");
+      setLastAction("No WiFi", true);
       drawBottomPanel();
-      handleSDCapture();
-      
-      // Restore UI 
-      displayReady();
-      livePreviewActive = true;
-      Serial.println("[Display] Resumed Live Preview");
-    } else if (buttonPressCount >= 2) {
-      livePreviewActive = false;
-      Serial.println("[Button] DOUBLE PRESS Detected: Syncing to Cloud!");
-      setUIMode("SYNCING");
-      setLastAction("Syncing...", false);
-      drawTopBar();
-      drawBottomPanel();
-      
-      // Visual Indicator for Sync - Fill viewfinder blue
-      displaySyncing();
-      
-      // Change LED to blue
-      led.setPixelColor(0, led.Color(0, 0, 255));
+      led.setPixelColor(0, led.Color(255, 0, 0));
       led.show();
-
-      handleUpload(); // We hijacked handleUpload to just trigger the sync queue
-      
-      // Restore LED to green
+      vTaskDelay(pdMS_TO_TICKS(1500));
+    } else if (!getAuthToken()) {
+      Serial.println("[Button] LONG PRESS: Not paired.");
+      setLastAction("Not Paired", true);
+      drawBottomPanel();
+      led.setPixelColor(0, led.Color(255, 165, 0));
+      led.show();
+      vTaskDelay(pdMS_TO_TICKS(1500));
+    } else if (getNextPendingUpload().length() == 0) {
+      Serial.println("[Button] LONG PRESS: Queue empty.");
+      setLastAction("Queue Empty", true);
+      drawBottomPanel();
+      led.setPixelColor(0, led.Color(255, 165, 0));
+      led.show();
+      vTaskDelay(pdMS_TO_TICKS(1500));
+    } else {
+      Serial.println("[Button] LONG PRESS: Uploading from SD queue...");
+      syncPendingQueue();
+      setLastAction("Upload Done", false);
+      drawBottomPanel();
       led.setPixelColor(0, led.Color(0, 255, 0));
       led.show();
-
-      // RESTORE UI - THIS WAS MISSING/FAILING PREVIOUSLY!
-      displayReady();
-      livePreviewActive = true;
-      Serial.println("[Display] Resumed Live Preview after Sync");
+      vTaskDelay(pdMS_TO_TICKS(500));
     }
-    buttonPressCount = 0; // Reset after handling
+
+    displayReady();
+    livePreviewActive = true;
+    Serial.println("[Display] Resumed Live Preview after Upload");
   }
 }
 
@@ -916,15 +955,33 @@ void loop() {
   // NOTE: Pairing and Sync checks were moved to background cloudTask!
   // This loop now only handles UI, button polling, and non-blocking WiFi tasks.
 
+  // Consume pairing-success signal from background task
+  if (pairingJustSucceeded) {
+    pairingJustSucceeded = false;
+    Serial.println("[Pairing] Confirmed! Updating display...");
+    displayReady();
+    drawTopBar();
+    drawBottomPanel();
+    led.setPixelColor(0, led.Color(0, 255, 0));
+    led.show();
+  }
+
   // --- LIVE CAMERA PREVIEW ---
-  // Suspend camera pulling during double-press gap to allow fast polling of
-  // button
-  if (isPaired && livePreviewActive && buttonPressCount == 0) {
+  // Suspend camera pulling during double-press gap to allow fast polling of button.
+  // QVGA (320x240) for preview: fast decode, correct scale. UXGA is restored before SD/upload capture.
+  static bool previewResSet = false;
+  if (isPaired && livePreviewActive && !isButtonPressed) {
+    if (!previewResSet) {
+      setImageResolution(FRAMESIZE_QVGA); // 320x240 for live preview
+      previewResSet = true;
+    }
     camera_fb_t *fb = captureFrame();
     if (fb) {
       displayDrawFrame(fb->buf, fb->len);
       returnFrame(fb);
     }
+  } else {
+    previewResSet = false; // reset so UXGA is restored on next capture
   }
 
   // Only yield briefly when idle (not paired/previewing) so wifiManager.process()

@@ -72,7 +72,9 @@ If confidence is still low, the scan image itself may be blurry or underexposed.
 
 ### White screen on TFT display
 
-- Check GPIO 35 (MOSI) breadboard connection — a loose wire here makes the ILI9341 RDDID return 0x00
+- Check GPIO 35 (MOSI) connection — a loose wire here prevents any commands reaching the panel
+- **Driver matters:** only `Panel_ILI9163` works on this display. Using ST7735, ST7789, or ILI9341 drivers all produce a white screen due to incompatible init/gamma sequences
+- Display is 1.8" ILI9163, 128×160 portrait, `setRotation(0)`, `invert=false`, `rgb_order=false`
 - See `handover_prompt.md` for full hardware notes
 
 ### WiFi portal white screen / can't connect
