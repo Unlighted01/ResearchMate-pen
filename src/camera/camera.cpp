@@ -193,14 +193,22 @@ camera_fb_t* captureHighRes() {
     esp_camera_fb_return(stale);
   }
 
+  // Apply text-optimized sensor settings for OCR capture (OV5640)
+  s->set_quality(s, 4);        // near-best JPEG quality for sharp text
+  s->set_contrast(s, 2);       // boost text edge sharpness
+  s->set_saturation(s, -2);    // reduce color noise, better text/bg separation
+  s->set_brightness(s, 1);     // slight brightness boost for shadow text
+  s->set_sharpness(s, 2);      // OV5640 hardware sharpening
+  Serial.println("[Camera] Applied OCR sensor settings (quality=4, contrast+2, sharp+2)");
+
   if (psramFound()) {
     // PSRAM available: switch to UXGA for max OCR quality
     s->set_framesize(s, FRAMESIZE_UXGA);
     Serial.println("[Camera] PSRAM found — switching to UXGA for capture...");
     vTaskDelay(pdMS_TO_TICKS(500));
 
-    // Flush transition frames so AEC/AWB can converge at new resolution
-    for (int i = 0; i < 4; i++) {
+    // Flush transition frames so AEC/AWB converge with new sensor settings
+    for (int i = 0; i < 6; i++) {
       camera_fb_t *flush = esp_camera_fb_get();
       if (flush) {
         Serial.printf("[Camera] Flushed frame %d (%u bytes, %dx%d)\n",
@@ -212,10 +220,8 @@ camera_fb_t* captureHighRes() {
       vTaskDelay(pdMS_TO_TICKS(100));
     }
   } else {
-    // No PSRAM: DMA buffers are QVGA-sized, can't switch to UXGA.
-    // Maximize quality at QVGA instead.
-    s->set_quality(s, 10); // best quality we can afford in DRAM
-    Serial.println("[Camera] No PSRAM — capturing at QVGA with quality=10");
+    // No PSRAM: DMA buffers are QVGA-sized, can't switch to UXGA
+    Serial.println("[Camera] No PSRAM — capturing at QVGA");
     vTaskDelay(pdMS_TO_TICKS(100));
 
     // Flush one frame to get fresh exposure
@@ -234,6 +240,14 @@ camera_fb_t* captureHighRes() {
   } else {
     Serial.println("[Camera] ERROR: Capture failed");
   }
+
+  // Restore default sensor settings for preview
+  s->set_quality(s, 12);
+  s->set_contrast(s, 0);
+  s->set_saturation(s, 0);
+  s->set_brightness(s, 0);
+  s->set_sharpness(s, 0);
+
   return frame;
 }
 

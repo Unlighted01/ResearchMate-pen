@@ -1,0 +1,514 @@
+╭─── Claude Code v2.1.86 ──────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting        │
+│                 Welcome back Kian!                 │ started                 │
+│                                                    │ Run /init to create a … │
+│                       ▐▛███▜▌                      │ ─────────────────────── │
+│                      ▝▜█████▛▘                     │ Recent activity         │
+│                        ▘▘ ▝▝                       │ No recent activity      │
+│  Sonnet 4.6 · Claude Pro · netnetku21@gmail.com's  │                         │
+│  Organization                                      │                         │
+│        ~\ReserachMate\ResearchMate Smart pen       │                         │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+✻ Conversation compacted (ctrl+o for history)
+
+  ⎿  Referenced file src\display\display.cpp
+  ⎿  Read src\cloud\cloud.cpp (436 lines)
+  ⎿  Referenced file src\main.cpp
+  ⎿  Read docs\TROUBLESHOOTING.md (99 lines)
+  ⎿  Read docs\handover_prompt.md (47 lines)
+
+  Read 1 file (ctrl+o to expand)
+
+● Now I have the full picture. Two changes needed:
+
+  1. Remove 10s periodic auto-sync from background task (line 677) — this is
+  what steals single-press photos
+  2. Replace handleUpload() call in double press with a direct
+  syncPendingQueue() call — handleUpload() calls server.send() with no active
+  HTTP request
+
+● Update(src\main.cpp)
+  ⎿  Added 4 lines, removed 4 lines
+      672               }
+      673            }
+      674  
+      675 -          // 3. Handle SD Queue Sync (Periodic or Forced)     
+      676 -          static unsigned long lastBackgroundSync = 0;        
+      677 -          if (isPaired && (forceSyncNext || (millis() - lastBa
+          -ckgroundSync > 10000))) {                                     
+      675 +          // 3. Handle SD Queue Sync (Only when explicitly tri
+          +ggered by double press)                                       
+      676 +          // NOTE: Periodic auto-sync intentionally removed. S
+          +ingle press = SD only.                                        
+      677 +          // Double press = user-initiated upload. Background 
+          +task must not steal photos.                                   
+      678 +          if (isPaired && forceSyncNext) {                    
+      679              forceSyncNext = false;
+      679 -            lastBackgroundSync = millis();                    
+      680              syncPendingQueue();
+      681            }
+      682  
+
+● Now fix the double press to call syncPendingQueue() directly instead of
+  handleUpload():
+
+● Update(src\main.cpp)
+  ⎿  Added 26 lines, removed 11 lines
+      846        Serial.println("[Display] Resumed Live Preview");
+      847      } else if (buttonPressCount >= 2) {
+      848        livePreviewActive = false;
+      849 -      Serial.println("[Button] DOUBLE PRESS Detected: Syncing 
+          -to Cloud!");                                                  
+      849 +      Serial.println("[Button] DOUBLE PRESS Detected: Uploadin
+          +g SD photo to Cloud!");                                       
+      850        setUIMode("SYNCING");
+      851 -      setLastAction("Syncing...", false);                     
+      851 +      setLastAction("Uploading...", false);                   
+      852        drawTopBar();
+      853        drawBottomPanel();
+      854 -                                                              
+      854 +                                                              
+      855        // Visual Indicator for Sync - Fill viewfinder blue
+      856        displaySyncing();
+      857 -                                                              
+      858 -      // Change LED to blue                                   
+      857 +                                                              
+      858 +      // Blue LED = uploading                                 
+      859        led.setPixelColor(0, led.Color(0, 0, 255));
+      860        led.show();
+      861  
+      862 -      handleUpload(); // We hijacked handleUpload to just trig
+          -ger the sync queue                                            
+      863 -                                                              
+      864 -      // Restore LED to green                                 
+      865 -      led.setPixelColor(0, led.Color(0, 255, 0));             
+      866 -      led.show();                                             
+      862 +      // Directly call sync — do NOT use handleUpload() which 
+          +calls server.send()                                           
+      863 +      // with no active HTTP request and only sets a flag for 
+          +the background task.                                          
+      864 +      if (!WiFi.isConnected()) {                              
+      865 +        Serial.println("[Button] DOUBLE PRESS: No WiFi, cannot
+          + upload.");                                                   
+      866 +        setLastAction("No WiFi", true);                       
+      867 +        drawBottomPanel();                                    
+      868 +        led.setPixelColor(0, led.Color(255, 0, 0));           
+      869 +        led.show();                                           
+      870 +        vTaskDelay(pdMS_TO_TICKS(1500));                      
+      871 +      } else if (!getAuthToken()) {                           
+      872 +        Serial.println("[Button] DOUBLE PRESS: Not paired, can
+          +not upload.");                                                
+      873 +        setLastAction("Not Paired", true);                    
+      874 +        drawBottomPanel();                                    
+      875 +        led.setPixelColor(0, led.Color(255, 165, 0));         
+      876 +        led.show();                                           
+      877 +        vTaskDelay(pdMS_TO_TICKS(1500));                      
+      878 +      } else {                                                
+      879 +        syncPendingQueue(); // Upload oldest SD photo and dele
+          +te on success                                                 
+      880 +        led.setPixelColor(0, led.Color(0, 255, 0));           
+      881 +        led.show();                                           
+      882 +      }                                                       
+      883  
+      868 -      // RESTORE UI - THIS WAS MISSING/FAILING PREVIOUSLY!    
+      884        displayReady();
+      885        livePreviewActive = true;
+      886        Serial.println("[Display] Resumed Live Preview after Syn
+           c");
+
+● Two changes made:
+
+  1. Background task (src/main.cpp:677) — removed the 10-second periodic
+  syncPendingQueue() call. The background task now only syncs when forceSyncNext
+   is explicitly set (which the web /api/upload endpoint still uses).
+  Single-press photos will now stay on the SD card until the user
+  double-presses.
+  2. Double press handler (src/main.cpp:847) — replaced handleUpload() with a
+  direct inline syncPendingQueue() call. This:
+    - Does NOT capture a new frame (that was never in the code, but the old path
+   was calling a web handler inappropriately)
+    - Does NOT call server.send() with no active request
+    - Checks WiFi + auth token first, shows proper error feedback on LCD if
+  either is missing
+    - Calls syncPendingQueue() directly — uploads the oldest SD photo and
+  deletes it on success
+
+  The flow is now:
+  - Single press → handleSDCapture() → saves JPEG to SD, stops there
+  - Double press → syncPendingQueue() → uploads the SD photo to cloud, deletes
+  it on success
+
+✻ Brewed for 5m 0s
+
+❯ [Image #8] i uploaded the press code but i haven't tested it because i notice 
+ that the camera preview is so small xD                                         
+  ⎿  [Image #8]
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● The fix is straightforward. Scale 4 gives 80×60 centered in a 128×120 zone —
+  tiny. Scale 2 gives 160×120 which fills the height perfectly. Drawing at x=-16
+   center-crops the 160px width into the 128px screen (LovyanGFX clips
+  out-of-bounds writes).
+
+● Update(src\display\display.cpp)
+  ⎿  Added 5 lines, removed 5 lines
+      325  
+      326  // ============================================
+      327  // Camera frame
+      328 -// Input: 320x240 JPEG. Scale 1/4 → 80x60.                    
+      329 -// Center in content zone (128x120): x=24, y=CONTENT_Y+30     
+      328 +// Input: 320x240 JPEG. Scale 1/2 → 160x120.                  
+      329 +// Height fills content zone exactly (120px). Width 160 > 128:
+          + draw at x=-16 to center-crop.                                
+      330  // ============================================
+      331  void displayDrawFrame(const uint8_t *jpg_data, size_t jpg_len)
+            {
+      332    if (!displayInitialized || !jpg_data) return;
+      333  
+      334 -  TJpgDec.setJpgScale(4);                                     
+      335 -  int xOff = (W - 80) / 2;                                    
+      336 -  int yOff = CONTENT_Y + (CONTENT_H - 60) / 2;                
+      334 +  TJpgDec.setJpgScale(2);                                     
+      335 +  int xOff = (W - 160) / 2; // -16: center-crops the 160px ima
+          +ge into 128px screen                                          
+      336 +  int yOff = CONTENT_Y;     // fills content zone top-to-botto
+          +m exactly                                                     
+      337    TJpgDec.drawJpg(xOff, yOff, jpg_data, jpg_len);
+      338    TJpgDec.setJpgScale(1);
+      339    tft.endWrite();
+
+● The live preview will now fill the entire content zone:
+  - Before: 80×60, floating in the center of the 128×120 zone with yellow
+  borders around it
+  - After: 160×120 scaled, drawn at x=−16 so the center 128px of the frame fills
+   the screen edge-to-edge, height fills top to bottom
+
+  The yellow background around the preview will disappear — the frame covers it
+  completely.
+
+✻ Baked for 55s
+
+❯ also the camera is capturing inverted negative colors                         
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● The JPEG decoder outputs big-endian RGB565, but LovyanGFX's pushImage expects
+  little-endian. setSwapBytes(false) means the bytes aren't being swapped, so
+  the RGB bits get scrambled — which reads as inverted/wrong colors.
+
+● Update(src\display\display.cpp)
+  ⎿  Added 1 line, removed 1 line
+      222    tft.setTextWrap(false);
+      223  
+      224    TJpgDec.setJpgScale(1);
+      225 -  TJpgDec.setSwapBytes(false);                                
+      225 +  TJpgDec.setSwapBytes(true);                                 
+      226    TJpgDec.setCallback(tft_output);
+      227  
+      228    // Boot splash
+
+● TJpgDec decodes JPEG into RGB565 big-endian. The ESP32 is little-endian, so
+  without the swap each pixel's bytes are reversed — red channel bleeds into
+  blue, etc., producing the negative/inverted look. setSwapBytes(true) corrects
+  this before the pixels hit pushImage.
+
+✻ Worked for 46s
+❯ [Image #9] it made it even worst xD                                           
+  ⎿  [Image #9]
+
+● Two separate issues caused this: reverting setSwapBytes is needed, AND the
+  negative x offset (−16) passed to pushImage causes it to read source pixels
+  incorrectly for each MCU block — that's the rainbow. The callback needs to
+  clip properly when x is negative.
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src\display\display.cpp)
+  ⎿  Added 22 lines, removed 2 lines
+       81  // JPEG decoder callback
+       82  // ============================================
+       83  bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, 
+           uint16_t *bitmap) {
+       84 -  if (y >= tft.height() || x >= tft.width()) return 1;        
+       85 -  tft.pushImage(x, y, w, h, (lgfx::rgb565_t*)bitmap);         
+       84 +  if (y >= tft.height() || y + (int16_t)h <= 0) return 1;     
+       85 +  if (x + (int16_t)w <= 0 || x >= tft.width()) return 1;      
+       86 +                                                              
+       87 +  // Clip left edge: when x is negative, skip source pixels so
+          + bitmap stays aligned                                         
+       88 +  int16_t srcOff = 0;                                         
+       89 +  int16_t dstX   = x;                                         
+       90 +  uint16_t drawW  = w;                                        
+       91 +  if (x < 0) {                                                
+       92 +    srcOff = -x;                                              
+       93 +    dstX   = 0;                                               
+       94 +    drawW  = w - srcOff;                                      
+       95 +  }                                                           
+       96 +  // Clip right edge                                          
+       97 +  if (dstX + drawW > (uint16_t)tft.width()) {                 
+       98 +    drawW = tft.width() - dstX;                               
+       99 +  }                                                           
+      100 +                                                              
+      101 +  // Draw row-by-row to respect the source offset into each MC
+          +U row                                                         
+      102 +  for (uint16_t row = 0; row < h; row++) {                    
+      103 +    tft.pushImage(dstX, y + row, drawW, 1,                    
+      104 +                  (lgfx::rgb565_t*)(bitmap + row * w + srcOff)
+          +);                                                            
+      105 +  }                                                           
+      106    return 1;
+      107  }
+      108  
+
+● Update(src\display\display.cpp)
+  ⎿  Added 1 line, removed 1 line
+      242    tft.setTextWrap(false);
+      243  
+      244    TJpgDec.setJpgScale(1);
+      245 -  TJpgDec.setSwapBytes(true);                                 
+      245 +  TJpgDec.setSwapBytes(false);                                
+      246    TJpgDec.setCallback(tft_output);
+      247  
+      248    // Boot splash
+
+● Now let me check the camera sensor settings for the color inversion:
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+● No special_effect on the camera, so the color inversion is a rendering issue.
+  Looking back at this clearly:
+
+  - The rainbow in Image #9 was caused by the clipping bug (negative x without
+  proper source offset) — not by setSwapBytes
+  - setSwapBytes(true) is actually correct: TJpgDec outputs big-endian RGB565,
+  but ESP32 is little-endian, so without swapping, red and blue channels swap
+  (which reads as a pseudo-negative)
+
+  The clipping is now fixed. Let me put setSwapBytes(true) back:
+
+● Update(src\display\display.cpp)
+  ⎿  Added 1 line, removed 1 line
+      242    tft.setTextWrap(false);
+      243  
+      244    TJpgDec.setJpgScale(1);
+      245 -  TJpgDec.setSwapBytes(false);                                
+      245 +  TJpgDec.setSwapBytes(true);                                 
+      246    TJpgDec.setCallback(tft_output);
+      247  
+      248    // Boot splash
+
+● What was happening before:
+
+  ┌────────────────────────┬─────────────────────────┬──────────────────────┐
+  │    TJpgDec output      │  Without swap → ESP32   │        Result        │
+  │      (big-endian)      │        reads as         │                      │
+  ├────────────────────────┼─────────────────────────┼──────────────────────┤
+  │ Red 0xF8 0x00          │ uint16_t 0x00F8         │ R=0, G=7, B=24 →     │
+  │                        │                         │ dark blue            │
+  ├────────────────────────┼─────────────────────────┼──────────────────────┤
+  │ Blue 0x00 0x1F         │ uint16_t 0x1F00         │ R=15, G=24, B=0 →    │
+  │                        │                         │ orange               │
+  └────────────────────────┴─────────────────────────┴──────────────────────┘
+
+  That's the pseudo-negative you saw. With setSwapBytes(true) the bytes are
+  corrected before the callback, so red maps to red.
+
+  The rainbow was a separate bug — each 16×16 MCU block's bitmap pointer was
+  being passed to pushImage starting at pixel 0 even when x=-16, so the wrong 16
+   columns of source data were being drawn. The row-by-row loop with srcOff now
+  skips the correct number of source pixels per row.
+
+  Flash this and the preview should fill the screen with correct colors.
+
+✻ Baked for 2m 48s
+
+❯ it's still the same                                                           
+
+● Let me read the full panel config and check how the camera pixel format is
+  set:
+
+  Read 3 files (ctrl+o to expand)
+
+● The root cause is in how TJpgDec's output interacts with LovyanGFX's type
+  system. TJpgDec without swap outputs big-endian RGB565 — that's what
+  lgfx::swap565_t is designed for. Using rgb565_t (little-endian) causes
+  LovyanGFX to misread the channel bits regardless of setSwapBytes, producing
+  the inverted look.
+
+  Also noticed: the camera initialises at UXGA (1600×1200) for OCR quality, but
+  the preview path never switches to a lower resolution. At scale 2, that's an
+  800×600 decoded image on a 128-wide screen — extremely slow and partly why
+  things look wrong. The preview needs to switch to QVGA first.
+
+  Both fixes together:
+
+● Update(src\display\display.cpp)
+  ⎿  Added 1 line, removed 1 line
+      242    tft.setTextWrap(false);
+      243  
+      244    TJpgDec.setJpgScale(1);
+      245 -  TJpgDec.setSwapBytes(true);                                 
+      245 +  TJpgDec.setSwapBytes(false); // TJpgDec outputs big-endian R
+          +GB565 — handled by swap565_t cast in callback                 
+      246    TJpgDec.setCallback(tft_output);
+      247  
+      248    // Boot splash
+
+● Update(src\display\display.cpp)
+  ⎿  Added 4 lines, removed 2 lines
+       98      drawW = tft.width() - dstX;
+       99    }
+      100  
+      101 -  // Draw row-by-row to respect the source offset into each MC
+          -U row                                                         
+      101 +  // Draw row-by-row to respect the source offset into each MC
+          +U row.                                                        
+      102 +  // TJpgDec outputs big-endian RGB565 (setSwapBytes=false), s
+          +o cast as                                                     
+      103 +  // swap565_t so LovyanGFX swaps bytes to correct little-endi
+          +an RGB before sending.                                        
+      104    for (uint16_t row = 0; row < h; row++) {
+      105      tft.pushImage(dstX, y + row, drawW, 1,
+      104 -                  (lgfx::rgb565_t*)(bitmap + row * w + srcOff)
+          -);                                                            
+      106 +                  (lgfx::swap565_t*)(bitmap + row * w + srcOff
+          +));                                                           
+      107    }
+      108    return 1;
+      109  }
+
+● Now fix the preview resolution. The camera stays at UXGA for SD/upload
+  captures but needs to drop to QVGA for live preview frames:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(src\main.cpp)
+  ⎿  Added 9 lines, removed 2 lines
+      944    }
+      945  
+      946    // --- LIVE CAMERA PREVIEW ---
+      947 -  // Suspend camera pulling during double-press gap to allow f
+          -ast polling of                                                
+      948 -  // button                                                   
+      947 +  // Suspend camera pulling during double-press gap to allow f
+          +ast polling of button.                                        
+      948 +  // QVGA (320x240) for preview: fast decode, correct scale. U
+          +XGA is restored before SD/upload capture.                     
+      949 +  static bool previewResSet = false;                          
+      950    if (isPaired && livePreviewActive && buttonPressCount == 0) 
+           {
+      951 +    if (!previewResSet) {                                     
+      952 +      setImageResolution(FRAMESIZE_QVGA); // 320x240 for live 
+          +preview                                                       
+      953 +      previewResSet = true;                                   
+      954 +    }                                                         
+      955      camera_fb_t *fb = captureFrame();
+      956      if (fb) {
+      957        displayDrawFrame(fb->buf, fb->len);
+      958        returnFrame(fb);
+      959      }
+      960 +  } else {                                                    
+      961 +    previewResSet = false; // reset so UXGA is restored on nex
+          +t capture                                                     
+      962    }
+      963  
+      964    // Only yield briefly when idle (not paired/previewing) so w
+           ifiManager.process()
+
+● Now restore UXGA before SD/upload capture. Add the resolution switch at the
+  start of handleSDCapture:
+
+● Update(src\main.cpp)
+  ⎿  Added 4 lines
+      241  void handleSDCapture() {
+      242    Serial.println("[Capture] Acquiring frame for SD Card...");
+      243  
+      244 +  // Switch to full UXGA resolution for OCR-quality capture (p
+          +review runs at QVGA)                                          
+      245 +  setHighResCapture();                                        
+      246 +  vTaskDelay(pdMS_TO_TICKS(150)); // one frame at 10MHz XCLK t
+          +o flush the QVGA buffer                                       
+      247 +                                                              
+      248    // Lazy init camera if needed
+      249    if (!initCamera()) {
+      250      Serial.println("[ERROR] SD Capture Failed: Camera init fai
+           led.");
+
+● Three changes:
+
+  1. swap565_t cast — TJpgDec without swap outputs big-endian RGB565.
+  lgfx::swap565_t tells LovyanGFX "swap these bytes before reading" — the
+  correct type for this data. rgb565_t was treating big-endian bytes as
+  little-endian, scrambling R/B.
+  2. QVGA for live preview — camera was at UXGA (1600×1200) during preview.
+  TJpgDec scale(2) on that = 800×600, far larger than screen, wasting CPU. Now
+  switches to 320×240 when preview starts → scale(2) = 160×120, exactly fills
+  the content zone.
+  3. UXGA restored before capture — handleSDCapture() switches back to UXGA +
+  quality 15 for the actual scan, then the 150ms delay flushes the stale QVGA
+  frame before grabbing the full-res one.
+✻ Cooked for 6m 28s
+
+❯ [Image #10] still the same XD i think we're doing something completely wrong  
+  ⎿  [Image #10]
+
+● Looking at Image #10, I can see the scene structure is correct (visible lines,
+   desk) but the colors are rainbow. This is the drawW underflow bug I
+  introduced: when x=-16 and block w=8 (TJpgDec scale-2 blocks are 8px wide),
+  drawW = 8 - 16 = -8 which wraps as uint16_t to 65528 — drawing 65k garbage
+  pixels per row.
+
+  The entire negative-x approach needs to go. Simplest fix: draw at x=0, let
+  LovyanGFX clip the right edge, skip blocks that start left of screen.
+
+● Update(src\display\display.cpp)
+  ⎿  Added 3 lines, removed 24 lines
+       81  // JPEG decoder callback
+       82  // ============================================
+       83  bool tft_output(int16_t x, int16_t y, uint16_t w, uint16_t h, 
+           uint16_t *bitmap) {
+       84 -  if (y >= tft.height() || y + (int16_t)h <= 0) return 1;     
+       85 -  if (x + (int16_t)w <= 0 || x >= tft.width()) return 1;      
+       86 -                                                              
+       87 -  // Clip left edge: when x is negative, skip source pixels so
+          - bitmap stays aligned                                         
+       88 -  int16_t srcOff = 0;                                         
+       89 -  int16_t dstX   = x;                                         
+       90 -  uint16_t drawW  = w;                                        
+       91 -  if (x < 0) {                                                
+       92 -    srcOff = -x;                                              
+       93 -    dstX   = 0;                                               
+       94 -    drawW  = w - srcOff;                                      
+       95 -  }                                                           
+       96 -  // Clip right edge                                          
+       97 -  if (dstX + drawW > (uint16_t)tft.width()) {                 
+       98 -    drawW = tft.width() - dstX;                               
+       99 -  }                                                           
+      100 -                                                              
+      101 -  // Draw row-by-row to respect the source offset into each MC
+          -U row.                                                        
+      102 -  // TJpgDec outputs big-endian RGB565 (setSwapBytes=false), s
+          -o cast as                                                     
+      103 -  // swap565_t so LovyanGFX swaps bytes to correct little-endi
+          -an RGB before sending.                                        
+      104 -  for (uint16_t row = 0; row < h; row++) {                    
+      105 -    tft.pushImage(dstX, y + row, drawW, 1,                    
+      106 -                  (lgfx::swap565_t*)(bitmap + row * w + srcOff
+          -));                                                           
+      107 -  }                                                           
+       84 +  if (y >= tft.height() || x >= tft.width()) return 1;        
+       85 +  if (x < 0) return 1; // skip blocks that start left of scree
+          +n (right edge clips automatically)                            
+       86 +  tft.pushImage(x, y, w, h, (lgfx::rgb565_t*)bitmap);         
+       87    return 1;
+       88  }
+       89  
+  ⎿  You've hit your limit · resets 1pm (Asia/Manila)
+     /upgrade or /extra-usage to finish what you’re working on.
+
+✻ Churned for 2m 56s
+
+❯ /rate-limit-options                                                           
+  ⎿  Login interrupted

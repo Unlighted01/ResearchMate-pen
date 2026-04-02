@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.platformio/penv/Scripts/platformio.exe run:*)",
+      "Bash(grep -E \"\\(^[^/]*\\\\.\\(h|cpp|md|ini\\)$|src/|docs/\\)\")",
+      "Bash(while read:*)",
+      "Bash(do grep:*)",
+      "Bash(echo \"  --> Found in: $file\")",
+      "Bash(done)",
+      "Bash(grep -rn \"35\\\\|36\\\\|37\" 'C:\\\\Users\\\\netne\\\\ReserachMate\\\\ResearchMate Smart pen/src' --include=*.h --include=*.cpp)",
+      "Bash(find /c/Users/netne/ReserachMate/ResearchMate Smart pen/src -type f \\\\\\(-name *.cpp -o -name *.h \\\\\\))",
+      "Bash(find /c/Users/netne/ReserachMate/ResearchMate Smart pen -name *.md -type f)",
+      "Bash(xargs grep:*)"
+    ]
+  }
+}

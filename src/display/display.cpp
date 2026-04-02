@@ -51,7 +51,7 @@ public:
       cfg.panel_height     = 160;
       cfg.offset_x         = 2;   // ILI9163 GRAM is 132 wide, center 128px panel
       cfg.offset_y         = 1;   // ILI9163 GRAM is 162 tall, center 160px panel
-      cfg.offset_rotation  = 0;
+      cfg.offset_rotation  = 2;
       cfg.dummy_read_pixel = 8;
       cfg.dummy_read_bits  = 1;
       cfg.readable         = true;
