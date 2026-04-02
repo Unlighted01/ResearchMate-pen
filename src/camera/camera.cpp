@@ -174,12 +174,67 @@ void setImageResolution(int framesize) {
   }
 }
 
-void setHighResCapture() {
-  sensor_t *s = esp_camera_sensor_get();
-  if (s) {
-    s->set_framesize(s, FRAMESIZE_UXGA);
-    s->set_quality(s, 15);
+camera_fb_t* captureHighRes() {
+  if (!cameraInitialized) {
+    Serial.println("[Camera] ERROR: Camera not initialized!");
+    return nullptr;
   }
+
+  sensor_t *s = esp_camera_sensor_get();
+  if (!s) {
+    Serial.println("[Camera] ERROR: Could not get sensor!");
+    return nullptr;
+  }
+
+  // Step 1: Drain any stale frame sitting in the queue.
+  camera_fb_t *stale = esp_camera_fb_get();
+  if (stale) {
+    Serial.printf("[Camera] Drained stale frame (%u bytes)\n", stale->len);
+    esp_camera_fb_return(stale);
+  }
+
+  if (psramFound()) {
+    // PSRAM available: switch to UXGA for max OCR quality
+    s->set_framesize(s, FRAMESIZE_UXGA);
+    Serial.println("[Camera] PSRAM found — switching to UXGA for capture...");
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    // Flush transition frames so AEC/AWB can converge at new resolution
+    for (int i = 0; i < 4; i++) {
+      camera_fb_t *flush = esp_camera_fb_get();
+      if (flush) {
+        Serial.printf("[Camera] Flushed frame %d (%u bytes, %dx%d)\n",
+                      i + 1, flush->len, flush->width, flush->height);
+        esp_camera_fb_return(flush);
+      } else {
+        Serial.printf("[Camera] Flush %d: no frame yet\n", i + 1);
+      }
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+  } else {
+    // No PSRAM: DMA buffers are QVGA-sized, can't switch to UXGA.
+    // Maximize quality at QVGA instead.
+    s->set_quality(s, 10); // best quality we can afford in DRAM
+    Serial.println("[Camera] No PSRAM — capturing at QVGA with quality=10");
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    // Flush one frame to get fresh exposure
+    camera_fb_t *flush = esp_camera_fb_get();
+    if (flush) {
+      esp_camera_fb_return(flush);
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
+  }
+
+  // Capture the real frame
+  camera_fb_t *frame = esp_camera_fb_get();
+  if (frame) {
+    Serial.printf("[Camera] Captured frame: %u bytes, %dx%d\n",
+                  frame->len, frame->width, frame->height);
+  } else {
+    Serial.println("[Camera] ERROR: Capture failed");
+  }
+  return frame;
 }
 
 void setStreamingMode() {

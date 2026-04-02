@@ -241,36 +241,43 @@ void handleCapture() {
 void handleSDCapture() {
   Serial.println("[Capture] Acquiring frame for SD Card...");
 
-  // Switch to full UXGA resolution for OCR-quality capture (preview runs at QVGA)
-  setHighResCapture();
-  vTaskDelay(pdMS_TO_TICKS(150)); // one frame at 10MHz XCLK to flush the QVGA buffer
-
-  // Lazy init camera if needed
-  if (!initCamera()) {
-    Serial.println("[ERROR] SD Capture Failed: Camera init failed.");
-    setLastAction("Camera Error", true);
-    drawBottomPanel();
-    return;
-  }
-
   displayCaptureFlash();
   setLastAction("Scanning...", false);
   drawBottomPanel();
 
-  // Grab the frame for SD card saving
-  camera_fb_t *fb = captureFrame();
+  // Capture at UXGA with proper stabilization (drains queue, waits for AEC/AWB)
+  camera_fb_t *fb = captureHighRes();
   if (!fb) {
     Serial.println("[ERROR] SD Capture Failed: No frame available.");
     setLastAction("Capture Error", true);
     drawBottomPanel();
-    displayReady(); // Ensure we return to clean state
+    setImageResolution(FRAMESIZE_QVGA);
+    setImageQuality(12);
+    displayReady();
+    return;
+  }
+
+  // Retry SD init if it wasn't ready at boot
+  if (!initSDCard()) {
+    Serial.println("[ERROR] SD Card not available — cannot save.");
+    setLastAction("No SD Card", true);
+    drawBottomPanel();
+    returnFrame(fb);
+    setImageResolution(FRAMESIZE_QVGA);
+    setImageQuality(12);
+    displayReady();
     return;
   }
 
   setLastAction("Saving...", false);
   drawBottomPanel();
+  Serial.printf("[Capture] Saving %u bytes to SD...\n", fb->len);
   String filename = saveImageToSD(fb->buf, fb->len);
   returnFrame(fb);
+
+  // Restore preview state after capture
+  setImageResolution(FRAMESIZE_QVGA);
+  setImageQuality(12); // restore default quality in case captureHighRes changed it
 
   if (filename.length() > 0) {
     Serial.printf("[Upload] Queued offline: %s\n", filename.c_str());

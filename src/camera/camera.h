@@ -19,14 +19,14 @@ void setImageQuality(int quality);
 // Set resolution
 void setImageResolution(int framesize);
 
-// High resolution capture mode
-void setHighResCapture();
-
 // Streaming mode
 void setStreamingMode();
 
 // Get frame directly
 camera_fb_t* captureFrame();
+
+// Capture at UXGA with proper stabilization (drains queue, switches res, flushes AEC)
+camera_fb_t* captureHighRes();
 
 // Return frame
 void returnFrame(camera_fb_t* frame);

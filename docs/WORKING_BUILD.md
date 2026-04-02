@@ -1,7 +1,7 @@
 # ✅ WORKING BUILD REFERENCE — DO NOT MODIFY WITHOUT TESTING
 
-> **Last Verified:** 2026-03-05  
-> **Status:** All hardware functional (display, camera, SD, buttons, LED, WiFi, cloud)  
+> **Last Verified:** 2026-04-02
+> **Status:** All hardware functional (display, camera, SD, buttons, LED, WiFi, cloud, PSRAM/UXGA)
 > **Rule:** If the display shows white after a code change, check wiring FIRST.
 
 ---
@@ -15,9 +15,10 @@
 | Framework | `arduino` |
 | Arduino Core | `3.20014.231204 (2.0.14)` |
 | MCU | `esp32s3` @ 240MHz |
-| Flash | 8MB QD |
+| Flash | 8MB QIO |
+| PSRAM | **16MB Octal** (enabled via `qio_opi` + `BOARD_HAS_PSRAM`) |
 | Partitions | `huge_app.csv` |
-| Memory Type | `qio_qspi` |
+| Memory Type | `qio_opi` |
 | USB Mode | Native CDC (`ARDUINO_USB_MODE=1`, `ARDUINO_USB_CDC_ON_BOOT=1`) |
 
 ---
@@ -51,9 +52,9 @@ cfg.freq_read   = 16000000;
 cfg.spi_3wire   = false;
 cfg.dma_channel = SPI_DMA_CH_AUTO;
 
-cfg.pin_sclk = 37;  // TFT_CLK
-cfg.pin_mosi = 35;  // TFT_MOSI
-cfg.pin_miso = 36;  // TFT_MISO (readable=true)
+cfg.pin_sclk = 46;  // TFT_CLK  (moved from 37 — PSRAM D7 conflict)
+cfg.pin_mosi = 45;  // TFT_MOSI (moved from 35 — PSRAM D5 conflict)
+cfg.pin_miso = -1;  // Disabled (36 freed for PSRAM D6, display is write-only)
 cfg.pin_dc   = 14;  // TFT_DC
 
 cfg.pin_cs   = 38;  // TFT_CS
@@ -78,7 +79,7 @@ cfg.pwm_channel = 7;
 ## Pin Assignment Summary
 
 ```
-TFT Display:  ILI9163 128x160, MOSI=35, CLK=37, MISO=36, CS=38, DC=14, RST=21, BL=47
+TFT Display:  ILI9163 128x160, MOSI=45, CLK=46, MISO=-1, CS=38, DC=14, RST=21, BL=47
 SD Card:      CS=42, MOSI=41, MISO=40, SCK=39
 Camera:       DVP parallel on GPIO 4-18 (hardwired on module)
 LED:          GPIO 48 (WS2812B)
@@ -95,8 +96,9 @@ build_flags =
     -DARDUINO_USB_MODE=1
     -DARDUINO_USB_CDC_ON_BOOT=1
     -DUSER_SETUP_LOADED=1
+    -DBOARD_HAS_PSRAM
 
-board_build.arduino.memory_type = qio_qspi
+board_build.arduino.memory_type = qio_opi
 ```
 
 ---
@@ -106,6 +108,6 @@ board_build.arduino.memory_type = qio_qspi
 1. **GPIO 3 = DEATH.** It's a strapping pin that controls JTAG/USB routing. Using it for a button locks the ESP32 into Download Mode — COM port vanishes, firmware never runs.
 2. **White screen = check SPI wires.** If RDDID returns `00 00 00`, the SPI data lines (MOSI/CLK/MISO) are physically disconnected. Reseat breadboard jumpers.
 3. **`delay()` in long loops = watchdog crash.** Use `vTaskDelay(pdMS_TO_TICKS(ms))` instead of `delay()` in any blocking `while` loop during `setup()`.
-4. **`memory_type = qio_qspi` may conflict with GPIO 35-37** on some ESP32-S3 variants with Octal PSRAM. Our board has no PSRAM, so it works fine. Do not change without testing.
+4. **`memory_type = qio_opi` enables 16MB Octal PSRAM.** GPIO 33-37 are reserved for the PSRAM data bus — do NOT wire anything to these pins. Display SPI was moved from GPIO 35/37 to GPIO 45/46 to avoid this conflict.
 5. **`tft.init()` must run early** in `setup()` — do not add long delays before it. ILI9163 has strict power-on timing requirements.
 6. **ILI9163 pixel offset:** The ILI9163 GRAM is 132x162, panel is 128x160. Use `offset_x=2, offset_y=1` to center the visible area. Without offsets, screen content is shifted 2px right and 1px down.

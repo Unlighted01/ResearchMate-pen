@@ -21,7 +21,7 @@ The ResearchMate Smart Pen is a custom hardware device built on the **ESP32-S3-W
     - **Lazy Initialization (RAM FIX):** To resolve the "WiFi Portal White Screen" caused by DRAM exhaustion, `initCamera()` and `server.begin()` are deferred. They only start *after* WiFi is stable or when an offline capture is triggered. This maximizes available heap for `WiFiManager`.
     - **Robust Pairing UI (NEW):** Added a periodic retry loop and a 5-second automatic redraw in `main.cpp`. This ensures the pairing code remains visible on the LCD until pairing is confirmed, preventing it from being cleared by other UI events.
     - **Unified Pairing State (NEW):** `display.cpp` state is now explicitly synced via `setPairingStatus()` whenever `isPaired` changes in `main.cpp`. This prevents the camera from triggering while the device technically shows an `[UNPAIRED]` status.
-    - **Camera Scaling:** Camera outputs 320x240 JPEG, scaled 1/4 (80×60) and centered in the 128×120 content zone on the 128×160 display.
+    - **Camera Dual-Mode:** Preview uses QVGA (320×240) scaled 1/2 to 160×120 for smooth 15fps display. Capture uses UXGA (1600×1200) via `captureHighRes()` which drains stale buffers, waits 500ms for sensor stabilization, flushes 4 frames for AEC/AWB convergence, then captures. Requires PSRAM (`qio_opi` + `BOARD_HAS_PSRAM`).
 5.  **Display Flash Prevention:**
     - `displaySleep()` is available to put the ILI9163 into a sleeping state and kill the backlight before any `ESP.restart()` call, preventing a jarring "white flash" during reboot.
 6.  **Display Clipping Bug & Endianness:**
@@ -30,9 +30,9 @@ The ResearchMate Smart Pen is a custom hardware device built on the **ESP32-S3-W
     - **IMPORTANT (Colors):** When pushing the decoded JPEG to the TFT via LovyanGFX, `.setSwapBytes(false)` is used alongside an explicit `(lgfx::swap565_t*)bitmap` cast inside the `tft.pushImage(...)` callback. This is required because `TJpgDec` outputs big-endian pixel data; casting to `rgb565_t` will scramble the Red and Blue channels.
 
 ### 🛠️ Hardware Stack
-- **LCD (SPI2_HOST):** ILI9163 1.8" 128×160, MOSI=35, CLK=37, CS=38, DC=14, RST=21, BL=47. No touch controller.
+- **LCD (SPI2_HOST):** ILI9163 1.8" 128×160, MOSI=45, CLK=46, CS=38, DC=14, RST=21, BL=47. No touch controller. MISO disabled (-1). Pins moved from 35/37 to free GPIO 33-37 for Octal PSRAM.
 - **SD CARD (SPI3_HOST):** Uses a dedicated SPI bus to avoid bandwidth contention with the display preview.
-- **CAMERA (Parallel DVP):** GPIOs 4-18. Uses PSRAM for captures.
+- **CAMERA (Parallel DVP):** GPIOs 4-18. Uses 16MB Octal PSRAM for UXGA (1600x1200) captures.
 
 ### 📂 File Structure
 - `src/main.cpp`: Orchestrates multi-tap capture button, WiFiManager, and Web Server (Port 8080).
@@ -41,10 +41,10 @@ The ResearchMate Smart Pen is a custom hardware device built on the **ESP32-S3-W
 - `src/storage/`: SD Card queue management for "Offline Capture" mode.
 
 ### ⏭️ Roadmap for the Next AI
-1.  **Predictive Buffer:** Since the S3 has 8MB PSRAM, implementing a circular buffer for the camera would allow capturing the "moment before" the button was pressed.
+1.  **Predictive Buffer:** Since the S3 has 16MB Octal PSRAM, implementing a circular buffer for the camera would allow capturing the "moment before" the button was pressed.
 2.  **True Sleep:** Hardware latch switch is now in place. Next step is a hardware-timed power latch circuit to achieve true 0uA sleep.
 3.  **Remote Config:** Ability to update the Supabase Auth Token wirelessly via the web portal rather than reflashing.
 
 ### ⚠️ Dev Notes
-- **White Screen?** Check GPIO 35 (MOSI) connection. Also note: only the ILI9163 driver works on this panel — ST7735/ST7789/ILI9341 drivers all produce a white screen due to incompatible init sequences.
+- **White Screen?** Check GPIO 45 (MOSI) and GPIO 46 (CLK) connections. Only the ILI9163 driver works on this panel — ST7735/ST7789/ILI9341 drivers all produce a white screen. **Do NOT use GPIO 33-37** — they are reserved for Octal PSRAM.
 - **Factory Reset:** Triggered by a long press of the Capture button during normal operation, then holding it for 5 seconds while the wipe UI completes to confirm. (The previous boot-time reset logic was removed).

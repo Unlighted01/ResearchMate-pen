@@ -1,19 +1,20 @@
 # ResearchMate Smart Pen - Hardware Pinout Reference
 
-> ⚠️ **VERIFIED WORKING BUILD** — Last confirmed: 2026-03-05
+> ⚠️ **VERIFIED WORKING BUILD** — Last confirmed: 2026-04-02
 > Do NOT change any pin assignments without physically re-wiring the hardware first.
 
-## ESP32-S3-WROOM-N16R8-CAM Pin Assignments
+## ESP32-S3-WROOM-N8R16 Pin Assignments
 
 ### TFT Display - SPI Interface
 
-> **Display:** 1.8" ILI9163 TFT, 128x160 portrait. Confirmed working 2026-04-01.
+> **Display:** 1.8" ILI9163 TFT, 128x160 portrait. Confirmed working 2026-04-02.
+> **Pin Migration (2026-04-02):** MOSI moved from GPIO 35→45, CLK from GPIO 37→46, MISO disabled (-1). This frees GPIO 33-37 for Octal PSRAM (16MB), enabling UXGA camera captures.
 
 | Function              | GPIO        | Notes                                    |
 | --------------------- | ----------- | ---------------------------------------- |
-| **MOSI** (Master Out) | **GPIO 35** | SPI Data — mapped to `SDA` on ILI9163 PCB |
-| **CLK** (SPI Clock)   | **GPIO 37** | SPI Clock                                |
-| ~~**MISO**~~          | ~~GPIO 36~~ | **NOT CONNECTED** — ILI9163 is write-only (no touch) |
+| **MOSI** (Master Out) | **GPIO 45** | SPI Data — mapped to `SDA` on ILI9163 PCB. Moved from GPIO 35 (PSRAM D5 conflict) |
+| **CLK** (SPI Clock)   | **GPIO 46** | SPI Clock. Moved from GPIO 37 (PSRAM D7 conflict) |
+| **MISO**              | **-1**      | Disabled — ILI9163 is write-only. GPIO 36 freed for PSRAM D6 |
 | **CS** (Chip Select)  | **GPIO 38** | Active LOW                               |
 | **DC** (Data/Command) | **GPIO 14** | HIGH=Data, LOW=Command — labeled `AO` on ILI9163 PCB |
 | **RST** (Reset)       | **GPIO 21** | Active LOW hardware RST                  |
@@ -76,19 +77,20 @@
 | ---------- | -------------------------------------- | --------------------------- |
 | **GPIO 0** | Boot mode strapping                    | OK for button (acceptable)  |
 | **GPIO 3** | **JTAG/USB strapping pin**             | **NEVER USE FOR BUTTONS**   |
-| **GPIO 45** | VDD_SPI voltage strapping             | Avoid                       |
-| **GPIO 46** | Boot ROM log strapping                | Avoid                       |
+| **GPIO 33-37** | **Octal PSRAM data bus (D4-D7, DQS)** | **Reserved for PSRAM — do NOT wire anything here** |
 | **GPIO 19, 20** | USB D+/D- (used by native USB CDC) | Do not touch                |
+
+> **Note on GPIO 45/46:** These are strapping pins but safe to use for SPI after boot. The display SPI initializes after boot completes, so strapping state doesn't matter. Verified working 2026-04-02.
 
 ---
 
 ## 🔌 Wiring Diagram
 
 ```
-ESP32-S3-CAM                     ILI9163 1.8" TFT (128x160)
+ESP32-S3-WROOM (N8R16)           ILI9163 1.8" TFT (128x160)
 ┌──────────────┐                ┌──────────────┐
-│   GPIO 35 ───┼────────────────┼─→ SDA (MOSI) │
-│   GPIO 37 ───┼────────────────┼─→ SCK        │
+│   GPIO 45 ───┼────────────────┼─→ SDA (MOSI) │
+│   GPIO 46 ───┼────────────────┼─→ SCK        │
 │   (no wire)  │                │  (no MISO)   │
 │   GPIO 38 ───┼────────────────┼─→ CS         │
 │   GPIO 14 ───┼────────────────┼─→ AO (DC)    │
