@@ -396,28 +396,26 @@ void syncPendingQueue() {
 
   LOG_DEBUG("[Sync] Found pending offline upload: %s", filename.c_str());
 
-  // Use the safe buffer read that allocates into SRAM/PSRAM, 
-  // ensuring the SD card is closed immediately after and the SPI bus is freed.
-  size_t imageSize = 0;
-  uint8_t *imageBuffer = readImageFromSD(filename, &imageSize);
-  
-  if (!imageBuffer || imageSize == 0) {
-    LOG_ERROR("[Sync] Corrupt SD file or out of memory, deleting: %s", filename.c_str());
+  // Stream directly from SD to avoid loading the full image into heap.
+  // Large UXGA files (200-370KB) cause heap exhaustion when buffered, failing mid-transfer.
+  File file = SD.open(filename.c_str(), FILE_READ);
+  if (!file || file.size() == 0) {
+    LOG_ERROR("[Sync] Cannot open SD file, deleting: %s", filename.c_str());
+    if (file) file.close();
     deleteImageFromSD(filename);
-    if (imageBuffer) free(imageBuffer);
     return;
   }
+
+  size_t imageSize = file.size();
 
   // Build endpoint with auth token
   String endpoint = String("/functions/v1/smart-pen?token=") + token;
   memset(g_responseBuffer, 0, sizeof(g_responseBuffer));
 
-  // Dispatch the HTTP request 
-  bool ok = httpRequest("POST", endpoint.c_str(), "image/jpeg", imageBuffer,
-                        imageSize, g_responseBuffer, sizeof(g_responseBuffer));
-                        
-  // Free the buffer immediately after sending to recover memory
-  free(imageBuffer);
+  // Stream the file directly without buffering into RAM
+  bool ok = httpRequestStream(endpoint.c_str(), file, imageSize, g_responseBuffer, sizeof(g_responseBuffer));
+
+  file.close();
 
   if (ok) {
     JsonDocument doc;

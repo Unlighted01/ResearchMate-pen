@@ -977,23 +977,26 @@ void loop() {
   // Suspend camera pulling during double-press gap to allow fast polling of button.
   // QVGA (320x240) for preview: fast decode, correct scale. UXGA is restored before SD/upload capture.
   static bool previewResSet = false;
+  static unsigned long lastPreviewMs = 0;
+  const unsigned long PREVIEW_INTERVAL_MS = 100; // ~10fps — reduces heat and DMA pressure
   if (isPaired && livePreviewActive && !isButtonPressed) {
     if (!previewResSet) {
       setImageResolution(FRAMESIZE_QVGA); // 320x240 for live preview
       previewResSet = true;
     }
-    camera_fb_t *fb = captureFrame();
-    if (fb) {
-      displayDrawFrame(fb->buf, fb->len);
-      returnFrame(fb);
+    unsigned long now = millis();
+    if (now - lastPreviewMs >= PREVIEW_INTERVAL_MS) {
+      lastPreviewMs = now;
+      camera_fb_t *fb = captureFrame();
+      if (fb) {
+        displayDrawFrame(fb->buf, fb->len);
+        returnFrame(fb);
+      }
     }
   } else {
     previewResSet = false; // reset so UXGA is restored on next capture
   }
 
-  // Only yield briefly when idle (not paired/previewing) so wifiManager.process()
-  // and server.handleClient() can serve HTTP as fast as possible.
-  if (!isPaired || !livePreviewActive) {
-    vTaskDelay(pdMS_TO_TICKS(1));
-  }
+  // Yield on every loop iteration to keep WiFi/wifiManager responsive.
+  vTaskDelay(pdMS_TO_TICKS(1));
 }
