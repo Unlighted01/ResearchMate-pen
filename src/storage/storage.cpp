@@ -86,24 +86,26 @@ String getNextPendingUpload() {
   if (!root || !root.isDirectory())
     return "";
 
+  String result = "";
   File file = root.openNextFile();
   while (file) {
     if (!file.isDirectory()) {
-      String filename = String(file.name());
+      result = String(file.name());
       file.close();
 
       // Normalize path structure just in case the SD library omits the root
-      if (!filename.startsWith("/")) {
-        filename = "/queue/" + filename;
-      } else if (!filename.startsWith("/queue/")) {
-        filename = "/queue" + filename;
+      if (!result.startsWith("/")) {
+        result = "/queue/" + result;
+      } else if (!result.startsWith("/queue/")) {
+        result = "/queue" + result;
       }
 
-      return filename;
+      break;
     }
     file = root.openNextFile();
   }
-  return "";
+  root.close(); // CRITICAL: release SD SPI bus so delete can work
+  return result;
 }
 
 bool deleteImageFromSD(const String &filename) {
